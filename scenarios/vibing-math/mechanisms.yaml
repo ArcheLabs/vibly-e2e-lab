@@ -3,8 +3,8 @@ mechanisms:
     name: vibing_math_e2e_mechanism_v1
     description: Deterministic local E2E mechanism for observation, review, tasks, rewards, and settlement.
     observerSelection: { primitive: random-selection, count: 1, minReputation: 0.5 }
-    participantSelection: { primitive: random-selection, count: 3 }
-    reviewerSelection: { primitive: random-selection, count: 2 }
+    participantSelection: { primitive: random-selection, count: 3, minReputation: 0.5 }
+    reviewerSelection: { primitive: random-selection, count: 2, minReputation: 0.5 }
     assignmentSelection: { primitive: random-selection, count: 1 }
-    timeout: { durationMs: 1000, action: select-backup }
+    timeout: { durationMs: 10000, action: select-backup }
     reward: { base: "100", reputationDelta: 8, penaltyOnFailure: -3 }
