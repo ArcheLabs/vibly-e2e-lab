@@ -1,6 +1,6 @@
 # vibly-e2e-lab
 
-> 中文文档：[agent/e2e.md](agent/e2e.md)
+> 中文文档：[README.zh.md](README.zh.md)
 
 Local multi-agent social simulation E2E lab for Vibly. The lab spins up a real `vibly-coordinator` process, seeds a fully configured multi-agent organization (the *Vibing Math / Goldbach Program* scenario), drives all state changes through Coordinator HTTP `ActionIntent`s, and asserts on the resulting event stream and knowledge base.
 
