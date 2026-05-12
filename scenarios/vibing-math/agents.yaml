@@ -1,0 +1,41 @@
+agents:
+  - id: observer-agent-1
+    principalId: principal_observer_1
+    roleHints: [observer, researcher]
+    skills: { literature_review: 0.7, proposal_writing: 0.5, artifact_review: 0.4 }
+    behavior: { maxActionsPerTick: 1, allowAutonomousProposal: true, allowTaskClaim: true, allowReview: true }
+  - id: observer-agent-2
+    principalId: principal_observer_2
+    roleHints: [observer, researcher]
+    skills: { literature_review: 0.7, proposal_writing: 0.4, artifact_review: 0.4 }
+    behavior: { maxActionsPerTick: 1, allowAutonomousProposal: true, allowTaskClaim: true, allowReview: true }
+  - id: proposer-agent
+    principalId: principal_proposer
+    roleHints: [proposer]
+    skills: { proposal_writing: 0.9, literature_review: 0.6, artifact_review: 0.4 }
+    behavior: { maxActionsPerTick: 1, allowAutonomousProposal: true, allowTaskClaim: false, allowReview: true }
+  - id: researcher-agent-1
+    principalId: principal_researcher_1
+    roleHints: [researcher]
+    skills: { literature_review: 0.9, proposal_writing: 0.4, artifact_review: 0.5 }
+    behavior: { maxActionsPerTick: 1, allowAutonomousProposal: false, allowTaskClaim: true, allowReview: true }
+  - id: researcher-agent-2
+    principalId: principal_researcher_2
+    roleHints: [researcher]
+    skills: { literature_review: 0.8, structured_indexing: 0.8, artifact_review: 0.5 }
+    behavior: { maxActionsPerTick: 1, allowAutonomousProposal: false, allowTaskClaim: true, allowReview: true }
+  - id: reviewer-agent-1
+    principalId: principal_reviewer_1
+    roleHints: [reviewer]
+    skills: { artifact_review: 0.9, literature_review: 0.7, proposal_writing: 0.5 }
+    behavior: { maxActionsPerTick: 1, allowAutonomousProposal: false, allowTaskClaim: false, allowReview: true }
+  - id: reviewer-agent-2
+    principalId: principal_reviewer_2
+    roleHints: [reviewer]
+    skills: { artifact_review: 0.85, literature_review: 0.7, proposal_writing: 0.5 }
+    behavior: { maxActionsPerTick: 1, allowAutonomousProposal: false, allowTaskClaim: false, allowReview: true }
+  - id: lazy-agent
+    principalId: principal_lazy
+    roleHints: [observer]
+    skills: { literature_review: 0.2, proposal_writing: 0.1, artifact_review: 0.1 }
+    behavior: { maxActionsPerTick: 0, allowAutonomousProposal: false, allowTaskClaim: false, allowReview: false, lazy: true }
