@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "e2e:local": "tsx src/runner.ts",
+    "e2e:console": "playwright test",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -13,6 +14,7 @@
     "yaml": "^2.8.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@types/node": "^22.15.3",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",
