@@ -424,9 +424,9 @@ export async function runSemiAutonomousScenario(
     }).then((r) => r.aggregateRef.id);
 
     const offerEvt = await waitFor<Json>(async () => {
-      const evts = await apiList(base, token, "/events", { limit: 300 });
+      const evts = await apiList(base, token, "/events", { type: "AssignmentOffered", limit: 200 });
       return evts.find(
-        (e) => e["type"] === "AssignmentOffered" && (e["payload"] as Json)?.["observationTaskId"] === obsTaskId,
+        (e) => (e["payload"] as Json)?.["observationTaskId"] === obsTaskId,
       );
     }, "SA AssignmentOffered");
 
@@ -678,10 +678,9 @@ export async function runSemiAutonomousScenario(
     }).then((r) => r.aggregateRef.id);
 
     const offer2 = await waitFor<Json>(async () => {
-      const evts = await apiList(base, token, "/events", { limit: 600 });
+      const evts = await apiList(base, token, "/events", { type: "AssignmentOffered", limit: 200 });
       return evts.find(
         (e) =>
-          e["type"] === "AssignmentOffered" &&
           (e["payload"] as Json)?.["observationTaskId"] === secondObsTaskId,
       );
     }, "SA second AssignmentOffered");

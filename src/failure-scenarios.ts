@@ -185,9 +185,9 @@ async function runFC1(base: string, token: string): Promise<ScenarioResult> {
     }).then((r) => r.aggregateRef.id);
 
     await waitFor<Json>(async () => {
-      const evts = await apiList(base, token, "/events", { limit: 200 });
+      const evts = await apiList(base, token, "/events", { type: "AssignmentOffered", limit: 200 });
       return evts.find(
-        (e) => e["type"] === "AssignmentOffered" && (e["payload"] as Json)?.["observationTaskId"] === taskId,
+        (e) => (e["payload"] as Json)?.["observationTaskId"] === taskId,
       );
     }, "FC1 AssignmentOffered");
 
@@ -197,9 +197,9 @@ async function runFC1(base: string, token: string): Promise<ScenarioResult> {
     await act(base, token, guardian, "TickAssignmentExpiry", {});
 
     await waitFor<Json>(async () => {
-      const evts = await apiList(base, token, "/events", { limit: 300 });
+      const evts = await apiList(base, token, "/events", { type: "AssignmentTimedOut", limit: 200 });
       return evts.find(
-        (e) => e["type"] === "AssignmentTimedOut" && (e["payload"] as Json)?.["assigneeId"] === lazyP,
+        (e) => (e["payload"] as Json)?.["assigneeId"] === lazyP,
       );
     }, "FC1 AssignmentTimedOut");
 
@@ -236,9 +236,9 @@ async function runFC2(base: string, token: string): Promise<ScenarioResult> {
     }).then((r) => r.aggregateRef.id);
 
     const offerEvt = await waitFor<Json>(async () => {
-      const evts = await apiList(base, token, "/events", { limit: 200 });
+      const evts = await apiList(base, token, "/events", { type: "AssignmentOffered", limit: 200 });
       return evts.find(
-        (e) => e["type"] === "AssignmentOffered" && (e["payload"] as Json)?.["observationTaskId"] === taskId,
+        (e) => (e["payload"] as Json)?.["observationTaskId"] === taskId,
       );
     }, "FC2 AssignmentOffered");
 
@@ -317,9 +317,9 @@ async function runFC3(base: string, token: string): Promise<ScenarioResult> {
     }).then((r) => r.aggregateRef.id);
 
     const offerEvt = await waitFor<Json>(async () => {
-      const evts = await apiList(base, token, "/events", { limit: 200 });
+      const evts = await apiList(base, token, "/events", { type: "AssignmentOffered", limit: 200 });
       return evts.find(
-        (e) => e["type"] === "AssignmentOffered" && (e["payload"] as Json)?.["observationTaskId"] === obsTaskId,
+        (e) => (e["payload"] as Json)?.["observationTaskId"] === obsTaskId,
       );
     }, "FC3 AssignmentOffered");
 
@@ -419,9 +419,9 @@ async function runFC4(base: string, token: string): Promise<ScenarioResult> {
     }).then((r) => r.aggregateRef.id);
 
     const offerEvt = await waitFor<Json>(async () => {
-      const evts = await apiList(base, token, "/events", { limit: 200 });
+      const evts = await apiList(base, token, "/events", { type: "AssignmentOffered", limit: 200 });
       return evts.find(
-        (e) => e["type"] === "AssignmentOffered" && (e["payload"] as Json)?.["observationTaskId"] === obsTaskId,
+        (e) => (e["payload"] as Json)?.["observationTaskId"] === obsTaskId,
       );
     }, "FC4 AssignmentOffered");
 
@@ -528,13 +528,11 @@ async function runFC4(base: string, token: string): Promise<ScenarioResult> {
     }
 
     await waitFor<Json>(async () => {
-      const evts = await apiList(base, token, "/events", { limit: 400 });
+      const evts = await apiList(base, token, "/events", { type: "ArtifactRejected", limit: 200 });
       return evts.find(
-        (e) =>
-          e["type"] === "ArtifactRejected" &&
-          ((e["payload"] as Json)?.["artifact"] as Json)?.["id"] === artifactId,
+        (e) => ((e["payload"] as Json)?.["artifact"] as Json)?.["id"] === artifactId,
       );
-    }, "FC4 ArtifactRejected");
+    }, "FC4 ArtifactRejected", 30_000);
 
     await sleep(500);
     const rewardIntents = await apiList(base, token, "/reward-intents", { organizationId: orgId });

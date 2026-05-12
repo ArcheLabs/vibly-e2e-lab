@@ -354,7 +354,10 @@ async function startCoordinator(): Promise<ChildProcessWithoutNullStreams> {
     return fakeChild();
   }
   const dbPath = path.join(DATA_DIR, "vibly-e2e-coordinator.sqlite");
-  if (existsSync(dbPath)) await rm(dbPath, { force: true });
+  // Remove SQLite main file and WAL journal files to ensure a clean state
+  await rm(dbPath, { force: true });
+  await rm(`${dbPath}-shm`, { force: true });
+  await rm(`${dbPath}-wal`, { force: true });
   const child = spawn("pnpm", ["--dir", path.resolve(ROOT, "../vibly-coordinator"), "dev"], {
     env: {
       ...process.env,
