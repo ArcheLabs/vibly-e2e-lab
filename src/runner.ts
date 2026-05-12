@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { runFailureScenarios } from "./failure-scenarios.js";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -44,9 +45,24 @@ async function main(): Promise<void> {
   try {
     const trace = await runDeterministicScenario();
     if (consoleProcess) await smokeConsole(String(trace.projectId));
-    const reportPath = path.join(REPORT_DIR, `deterministic-${Date.now()}.json`);
-    await writeFile(reportPath, JSON.stringify(trace, null, 2));
+
+    const failureReport = await runFailureScenarios({
+      coordinatorUrl: COORDINATOR_URL,
+      apiToken: API_TOKEN,
+      mainOrgId: String(trace.organizationId),
+      mainProjectId: String(trace.projectId),
+    });
+
+    const ts = Date.now();
+    const reportPath = path.join(REPORT_DIR, `deterministic-${ts}.json`);
+    await writeFile(reportPath, JSON.stringify({ ...trace, failureScenarios: failureReport }, null, 2));
     console.log(`[e2e] deterministic scenario passed. report=${reportPath}`);
+    const failedFCs = (["fc1", "fc2", "fc3", "fc4", "fc5"] as const).filter((k) => failureReport[k] !== "passed");
+    if (failedFCs.length > 0) {
+      console.warn(`[e2e] failure scenarios not all passed: ${failedFCs.join(", ")}`);
+    } else {
+      console.log("[e2e] all failure scenarios passed.");
+    }
   } finally {
     await stopChildren();
     coordinator.kill("SIGTERM");
