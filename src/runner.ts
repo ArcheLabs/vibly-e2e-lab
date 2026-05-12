@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { runFailureScenarios } from "./failure-scenarios.js";
+import { runSemiAutonomousScenario } from "./semi-autonomous.js";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -55,7 +56,6 @@ async function main(): Promise<void> {
 
     const ts = Date.now();
     const reportPath = path.join(REPORT_DIR, `deterministic-${ts}.json`);
-    await writeFile(reportPath, JSON.stringify({ ...trace, failureScenarios: failureReport }, null, 2));
     console.log(`[e2e] deterministic scenario passed. report=${reportPath}`);
     const failedFCs = (["fc1", "fc2", "fc3", "fc4", "fc5"] as const).filter((k) => failureReport[k] !== "passed");
     if (failedFCs.length > 0) {
@@ -63,6 +63,29 @@ async function main(): Promise<void> {
     } else {
       console.log("[e2e] all failure scenarios passed.");
     }
+
+    // ── Phase D: semi-autonomous LLM mode (opt-in) ──────────────────────────────
+    const llmApiKey = process.env.OPENAI_API_KEY;
+    let semiAutonomous: Record<string, unknown> | undefined;
+    if (llmApiKey) {
+      const llmBaseURL = process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1";
+      const llmModel = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+      console.log(`[e2e] semi-autonomous mode enabled (baseURL=${llmBaseURL}, model=${llmModel})`);
+      semiAutonomous = await runSemiAutonomousScenario(COORDINATOR_URL, API_TOKEN, {
+        apiKey: llmApiKey,
+        baseURL: llmBaseURL,
+        model: llmModel,
+      });
+      console.log(`[e2e] semi-autonomous: ${String(semiAutonomous["status"])}`);
+    } else {
+      console.log("[e2e] OPENAI_API_KEY not set — semi-autonomous mode skipped.");
+      semiAutonomous = { status: "skipped" };
+    }
+
+    await writeFile(
+      reportPath,
+      JSON.stringify({ ...trace, failureScenarios: failureReport, semiAutonomous }, null, 2),
+    );
   } finally {
     await stopChildren();
     coordinator.kill("SIGTERM");

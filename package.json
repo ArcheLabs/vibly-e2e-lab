@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@vibly/coordinator-http-contract": "file:../vibly-coordinator-http-contract",
+    "openai": "^6.37.0",
     "yaml": "^2.8.1"
   },
   "devDependencies": {
