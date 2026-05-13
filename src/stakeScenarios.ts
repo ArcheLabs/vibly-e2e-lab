@@ -482,10 +482,11 @@ async function spawnChainCli(
         reject(new Error(`CLI exit ${String(code)}: ${stderr}\n${stdout}`));
         return;
       }
-      const line = stdout.trim().split("\n").reverse().find((l) => l.trim().startsWith("{"));
-      if (!line) { resolve({}); return; }
-      try { resolve(JSON.parse(line) as Record<string, unknown>); }
-      catch (e) { reject(new Error(`JSON parse: ${String(e)}\n${line}`)); }
+      const lastBrace = stdout.lastIndexOf("\n{");
+      const jsonStr = lastBrace >= 0 ? stdout.slice(lastBrace + 1).trim() : stdout.trim();
+      if (!jsonStr.startsWith("{")) { resolve({}); return; }
+      try { resolve(JSON.parse(jsonStr) as Record<string, unknown>); }
+      catch (e) { reject(new Error(`JSON parse: ${String(e)}\n${jsonStr.slice(0, 200)}`)); }
     });
     child.on("error", reject);
   });

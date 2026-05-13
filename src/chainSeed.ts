@@ -204,15 +204,20 @@ async function spawnCli(args: string[]): Promise<Record<string, unknown>> {
         );
         return;
       }
-      const jsonLine = stdout.trim().split("\n").reverse().find((l) => l.trim().startsWith("{"));
-      if (!jsonLine) {
+      // printOutput writes pretty-printed multi-line JSON.  Find the last JSON
+      // object in stdout (starting from the last bare "{" on its own segment).
+      const lastBrace = stdout.lastIndexOf("\n{");
+      const jsonStr = lastBrace >= 0
+        ? stdout.slice(lastBrace + 1).trim()
+        : stdout.trim();
+      if (!jsonStr.startsWith("{")) {
         reject(new Error(`No JSON in CLI output for: ${args.join(" ")}\nstdout: ${stdout}`));
         return;
       }
       try {
-        resolve(JSON.parse(jsonLine) as Record<string, unknown>);
+        resolve(JSON.parse(jsonStr) as Record<string, unknown>);
       } catch (e) {
-        reject(new Error(`Failed to parse CLI JSON: ${String(e)}\noutput: ${jsonLine}`));
+        reject(new Error(`Failed to parse CLI JSON: ${String(e)}\noutput: ${jsonStr.slice(0, 200)}`));
       }
     });
     child.on("error", reject);
