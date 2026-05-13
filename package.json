@@ -5,6 +5,11 @@
   "type": "module",
   "scripts": {
     "e2e:local": "tsx --env-file=.env src/runner.ts",
+    "e2e:local:mock-stake": "VIBLY_E2E_MOCK_STAKE=true tsx --env-file=.env src/runner.ts",
+    "e2e:local:no-console": "VIBLY_E2E_SKIP_CONSOLE=true tsx --env-file=.env src/runner.ts",
+    "e2e:stake": "tsx --env-file=.env src/stakeScenarios.ts",
+    "e2e:stake:unbond": "VIBLY_E2E_UNBOND=true tsx --env-file=.env src/stakeScenarios.ts",
+    "e2e:stake:stale-indexer": "VIBLY_E2E_STALE_INDEXER=true tsx --env-file=.env src/stakeScenarios.ts",
     "e2e:console": "playwright test",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"

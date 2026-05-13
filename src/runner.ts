@@ -6,6 +6,17 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import YAML from "yaml";
+import {
+  startSoloNode,
+  stopSoloNode,
+  type SoloNodeHandle,
+} from "./lifecycle/soloNode.js";
+import {
+  startIndexer,
+  stopIndexer,
+  type IndexerHandle,
+} from "./lifecycle/indexer.js";
+import { seedChainAgent, type ChainSeedReceipt } from "./chainSeed.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const SCENARIO = path.join(ROOT, "scenarios", "vibing-math");
@@ -16,6 +27,14 @@ const CONSOLE_PORT = Number(process.env.VIBLY_E2E_CONSOLE_PORT ?? "3001");
 const COORDINATOR_URL = process.env.COORDINATOR_URL ?? `http://127.0.0.1:${COORDINATOR_PORT}`;
 const API_TOKEN = process.env.COORDINATOR_API_TOKEN ?? "dev-token";
 const CHAIN_ID = process.env.VIBLY_E2E_CHAIN_ID ?? "substrate:vibly-solo";
+
+/**
+ * When VIBLY_E2E_MOCK_STAKE=true the runner falls back to the legacy
+ * UpsertAgentStakeLedger coordinator seed and does NOT start chain/indexer.
+ * When false (default) or VIBLY_E2E_USE_REAL_STAKE=true it uses the real
+ * chain-backed flow.
+ */
+const USE_REAL_STAKE = process.env.VIBLY_E2E_MOCK_STAKE !== "true";
 
 type AgentConfig = {
   id: string;
@@ -30,10 +49,18 @@ type MechanismConfig = Record<string, unknown> & { id: string; name: string };
 type Json = Record<string, unknown>;
 
 const children: ChildProcessWithoutNullStreams[] = [];
+let soloNodeHandle: SoloNodeHandle | undefined;
+let indexerHandle: IndexerHandle | undefined;
 
 async function main(): Promise<void> {
   await mkdir(REPORT_DIR, { recursive: true });
   await mkdir(DATA_DIR, { recursive: true });
+
+  // ── Chain / Indexer lifecycle (real stake mode) ───────────────────────────
+  if (USE_REAL_STAKE) {
+    soloNodeHandle = await startSoloNode({ rpcExternal: true });
+    indexerHandle = await startIndexer(soloNodeHandle.rpcPort);
+  }
 
   const coordinator = await startCoordinator();
   let consoleProcess: ChildProcessWithoutNullStreams | undefined;
@@ -87,10 +114,29 @@ async function main(): Promise<void> {
       reportPath,
       JSON.stringify({ ...trace, failureScenarios: failureReport, semiAutonomous }, null, 2),
     );
+
+    if (USE_REAL_STAKE) {
+      const stakeReportPath = path.join(REPORT_DIR, `chain-stake-${ts}.json`);
+      await writeFile(
+        stakeReportPath,
+        JSON.stringify(
+          {
+            stakeMode: trace.mode,
+            sseTiming: trace.sseTiming,
+            chainSeed: trace.chainSeed,
+          },
+          null,
+          2,
+        ),
+      );
+      console.log(`[e2e] chain-stake report=${stakeReportPath}`);
+    }
   } finally {
     await stopChildren();
     coordinator.kill("SIGTERM");
     consoleProcess?.kill("SIGTERM");
+    if (indexerHandle) await stopIndexer();
+    if (soloNodeHandle) await stopSoloNode(soloNodeHandle);
   }
 }
 
@@ -136,11 +182,48 @@ async function runDeterministicScenario(): Promise<Json> {
   }).then((body) => unwrapKey<Json>(body, "project"));
   const projectId = String(project.id);
 
+  // Chain seed receipts — populated in real-stake mode, empty in mock mode.
+  const chainSeedReceipts: Record<string, ChainSeedReceipt> = {};
+
   for (const agent of agents.agents) {
     const capabilities = [...new Set([...agent.roleHints, ...Object.keys(agent.skills)])];
     const reputationScore = agent.id === "lazy-agent" ? 0.1 : 0.7;
-    const identityId = `identity_${agent.id}`;
-    const chainAgentId = `chain_agent_${agent.id}`;
+
+    // ── Real stake mode: seed identity/agent/bond on chain ─────────────────
+    let identityId: string;
+    let chainAgentId: string;
+
+    if (USE_REAL_STAKE) {
+      const receipt = await seedChainAgent({
+        agentId: agent.id,
+        coordinatorUrl: COORDINATOR_URL,
+        apiToken: API_TOKEN,
+        chainRpcUrl: `ws://127.0.0.1:${soloNodeHandle?.rpcPort ?? 9944}`,
+        graphqlUrl: indexerHandle?.graphqlUrl ?? "http://127.0.0.1:3010/graphql",
+        chainId: CHAIN_ID,
+        bondAmount: "100",
+      });
+      identityId = receipt.identityId;
+      chainAgentId = receipt.chainAgentId;
+      chainSeedReceipts[agent.id] = receipt;
+    } else {
+      // ── Mock stake fallback (legacy) ──────────────────────────────────────
+      identityId = `identity_${agent.id}`;
+      chainAgentId = `chain_agent_${agent.id}`;
+      await action("UpsertAgentStakeLedger", guardian, {
+        chainId: CHAIN_ID,
+        identityId,
+        chainAgentId,
+        principalId: agent.principalId,
+        fundingAccount: `${agent.id}_funding`,
+        activeAmount: "100",
+        unbondingAmount: "0",
+        status: "active",
+        releaseBlocked: false,
+        updatedAtBlock: "1",
+      });
+    }
+
     await action("RegisterAgentProfile", guardian, {
       principalId: agent.principalId,
       displayName: agent.id,
@@ -151,18 +234,6 @@ async function runDeterministicScenario(): Promise<Json> {
       identityId,
       chainAgentId,
       dutyStatus: "active",
-    });
-    await action("UpsertAgentStakeLedger", guardian, {
-      chainId: CHAIN_ID,
-      identityId,
-      chainAgentId,
-      principalId: agent.principalId,
-      fundingAccount: `${agent.id}_funding`,
-      activeAmount: "100",
-      unbondingAmount: "0",
-      status: "active",
-      releaseBlocked: false,
-      updatedAtBlock: "1",
     });
     await action("AddMember", guardian, {
       organizationId: orgId,
@@ -250,6 +321,46 @@ async function runDeterministicScenario(): Promise<Json> {
       ? items
       : undefined), "second daemon observation", 45_000);
 
+  // ── Phase 7: SSE timing assertion ─────────────────────────────────────────
+  // Create a third observation task; daemons use a short interval (750 ms),
+  // so if the SSE push is working the daemon should respond well within 5 s.
+  let sseTiming: Json = { status: "skipped" };
+  if (process.env.VIBLY_E2E_SKIP_SSE_TIMING !== "true") {
+    const sseTaskId = await action("CreateObservationTask", guardian, {
+      organizationId: orgId,
+      projectId,
+      title: "SSE timing probe",
+      description: "Verify daemon responds promptly via SSE push.",
+      mechanismId: "mechanism_vibing_math_main",
+    }).then((result) => result.aggregateRef.id);
+
+    const taskCreatedAt = Date.now();
+    try {
+      await waitFor<Json>(
+        () =>
+          list<Json>("/events", { limit: 50, organizationId: orgId }).then((evts) =>
+            evts.find(
+              (e) =>
+                (e.type === "AssignmentAccepted" || e.type === "ObservationSubmitted") &&
+                String(e.observationTaskId ?? e.taskId ?? "") === sseTaskId,
+            ),
+          ),
+        "SSE timing probe — daemon accepted assignment",
+        10_000,
+      );
+      const elapsed = Date.now() - taskCreatedAt;
+      const sseDelivered = elapsed < 5_000;
+      sseTiming = { status: sseDelivered ? "passed" : "slow", elapsedMs: elapsed };
+      if (sseDelivered) {
+        console.log(`[e2e] SSE timing: daemon responded in ${elapsed}ms ✓`);
+      } else {
+        console.warn(`[e2e] SSE timing: daemon took ${elapsed}ms (>5s — possible polling fallback)`);
+      }
+    } catch {
+      sseTiming = { status: "no-response", elapsedMs: Date.now() - taskCreatedAt };
+    }
+  }
+
   const events = await list<Json>("/events", { limit: 200 });
   assertEventTypes(events, [
     "ObservationTaskCreated",
@@ -269,7 +380,7 @@ async function runDeterministicScenario(): Promise<Json> {
   ]);
 
   return {
-    mode: "deterministic",
+    mode: USE_REAL_STAKE ? "real-stake" : "mock-stake",
     organizationId: orgId,
     projectId,
     proposalId,
@@ -278,6 +389,20 @@ async function runDeterministicScenario(): Promise<Json> {
     proposalRequestSeen,
     daemonPids: daemonProcesses.map((child) => child.pid),
     eventTypes: events.map((event) => event.type),
+    sseTiming,
+    chainSeed: USE_REAL_STAKE
+      ? Object.fromEntries(
+          Object.entries(chainSeedReceipts).map(([id, r]) => [
+            id,
+            {
+              identityId: r.identityId,
+              chainAgentId: r.chainAgentId,
+              bondTxHash: r.bondTxHash,
+              indexerLedgerStatus: r.indexerLedger.status,
+            },
+          ]),
+        )
+      : "mock",
   };
 }
 
@@ -291,6 +416,20 @@ async function startCoordinator(): Promise<ChildProcessWithoutNullStreams> {
   await rm(dbPath, { force: true });
   await rm(`${dbPath}-shm`, { force: true });
   await rm(`${dbPath}-wal`, { force: true });
+
+  // In real-stake mode, wire the coordinator to the running indexer.
+  const stakeEnv: Record<string, string> = USE_REAL_STAKE
+    ? {
+        SUBSTRATE_INDEXER_URL: indexerHandle?.graphqlUrl ?? "http://127.0.0.1:3010/graphql",
+        AGENT_STAKE_SYNC_INTERVAL_MS: "500",
+        AGENT_STAKE_FRESHNESS_MS: process.env.AGENT_STAKE_FRESHNESS_MS ?? "30000",
+        SUBSTRATE_STAKE_TX_MODE: "fixture",
+        SUBSTRATE_CHAIN_ID: CHAIN_ID,
+      }
+    : {
+        AGENT_STAKE_FRESHNESS_MS: process.env.AGENT_STAKE_FRESHNESS_MS ?? "600000",
+      };
+
   const child = spawn("pnpm", ["--dir", path.resolve(ROOT, "../vibly-coordinator"), "dev"], {
     env: {
       ...process.env,
@@ -305,7 +444,7 @@ async function startCoordinator(): Promise<ChildProcessWithoutNullStreams> {
       LOG_LEVEL: "warn",
       GOVERNANCE_BACKENDS: "",
       ASSIGNMENT_EXPIRY_INTERVAL_MS: process.env.ASSIGNMENT_EXPIRY_INTERVAL_MS ?? "250",
-      AGENT_STAKE_FRESHNESS_MS: process.env.AGENT_STAKE_FRESHNESS_MS ?? "600000",
+      ...stakeEnv,
     },
     stdio: "pipe",
   });
