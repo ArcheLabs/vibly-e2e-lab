@@ -305,6 +305,7 @@ async function startCoordinator(): Promise<ChildProcessWithoutNullStreams> {
       LOG_LEVEL: "warn",
       GOVERNANCE_BACKENDS: "",
       ASSIGNMENT_EXPIRY_INTERVAL_MS: process.env.ASSIGNMENT_EXPIRY_INTERVAL_MS ?? "250",
+      AGENT_STAKE_FRESHNESS_MS: process.env.AGENT_STAKE_FRESHNESS_MS ?? "600000",
     },
     stdio: "pipe",
   });
