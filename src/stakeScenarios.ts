@@ -467,9 +467,10 @@ async function spawnChainCli(
   const { spawn } = await import("node:child_process");
   const CLIENT_DIR = path.resolve(ROOT, "../vibly-client");
   return new Promise((resolve, reject) => {
+    // Invoke tsx directly to avoid pnpm's "--" separator breaking Commander.js option parsing.
     const child = spawn(
       "pnpm",
-      ["dev", "--", ...args, "--rpc-url", rpcUrl, "--signer-uri", signerUri, "--chain-id", chainId],
+      ["exec", "tsx", "src/main.ts", ...args, "--rpc-url", rpcUrl, "--signer-uri", signerUri, "--chain-id", chainId],
       { cwd: CLIENT_DIR, env: { ...process.env }, stdio: "pipe" },
     );
     let stdout = "";

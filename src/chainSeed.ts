@@ -177,9 +177,12 @@ async function spawnCliJson<T extends Record<string, unknown>>(args: string[]): 
 
 async function spawnCli(args: string[]): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
+    // Invoke tsx directly (via pnpm exec) to avoid pnpm's "--" separator being
+    // forwarded to the script, which causes Commander.js to treat everything
+    // after "--" as literal positional arguments and silently ignore --json.
     const child = spawn(
       "pnpm",
-      ["dev", "--", ...args],
+      ["exec", "tsx", "src/main.ts", ...args],
       {
         cwd: CLIENT_DIR,
         env: { ...process.env },
