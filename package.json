@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "e2e:local": "tsx --env-file=.env src/runner.ts",
+    "e2e:stop": "tsx --env-file=.env src/stop.ts",
     "e2e:local:mock-stake": "VIBLY_E2E_MOCK_STAKE=true tsx --env-file=.env src/runner.ts",
     "e2e:local:no-console": "VIBLY_E2E_SKIP_CONSOLE=true tsx --env-file=.env src/runner.ts",
     "e2e:stake": "tsx --env-file=.env src/stakeScenarios.ts",

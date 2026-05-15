@@ -5,6 +5,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { networkInterfaces } from "node:os";
 import YAML from "yaml";
 import {
   startSoloNode,
@@ -16,7 +17,7 @@ import {
   stopIndexer,
   type IndexerHandle,
 } from "./lifecycle/indexer.js";
-import { seedChainAgent, type ChainSeedReceipt } from "./chainSeed.js";
+import { seedChainAgent, waitForCoordinatorStakeSync, type ChainSeedReceipt } from "./chainSeed.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const SCENARIO = path.join(ROOT, "scenarios", "vibing-math");
@@ -27,6 +28,12 @@ const CONSOLE_PORT = Number(process.env.VIBLY_E2E_CONSOLE_PORT ?? "3001");
 const COORDINATOR_URL = process.env.COORDINATOR_URL ?? `http://127.0.0.1:${COORDINATOR_PORT}`;
 const API_TOKEN = process.env.COORDINATOR_API_TOKEN ?? "dev-token";
 const CHAIN_ID = process.env.VIBLY_E2E_CHAIN_ID ?? "substrate:vibly-solo";
+const KEEP_ALIVE =
+  process.env.VIBLY_E2E_KEEP_ALIVE === "true" ||
+  process.env.VIBLY_E2E_KEEP_ALIVE_ON_SUCCESS === "true" ||
+  process.env.VIBLY_E2E_KEEP_ALIVE_ON_FAILURE === "true";
+const KEEP_ALIVE_ON_SUCCESS = KEEP_ALIVE || process.env.VIBLY_E2E_KEEP_ALIVE_ON_SUCCESS === "true";
+const KEEP_ALIVE_ON_FAILURE = KEEP_ALIVE || process.env.VIBLY_E2E_KEEP_ALIVE_ON_FAILURE === "true";
 
 /**
  * When VIBLY_E2E_MOCK_STAKE=true the runner falls back to the legacy
@@ -71,6 +78,9 @@ async function main(): Promise<void> {
     });
   }
 
+  let completed = false;
+  let reportPath: string | undefined;
+  let stakeReportPath: string | undefined;
   try {
     const trace = await runDeterministicScenario();
     if (consoleProcess) await smokeConsole(String(trace.projectId));
@@ -83,7 +93,7 @@ async function main(): Promise<void> {
     });
 
     const ts = Date.now();
-    const reportPath = path.join(REPORT_DIR, `deterministic-${ts}.json`);
+    reportPath = path.join(REPORT_DIR, `deterministic-${ts}.json`);
     console.log(`[e2e] deterministic scenario passed. report=${reportPath}`);
     const failedFCs = (["fc1", "fc2", "fc3", "fc4", "fc5"] as const).filter((k) => failureReport[k] !== "passed");
     if (failedFCs.length > 0) {
@@ -116,7 +126,7 @@ async function main(): Promise<void> {
     );
 
     if (USE_REAL_STAKE) {
-      const stakeReportPath = path.join(REPORT_DIR, `chain-stake-${ts}.json`);
+      stakeReportPath = path.join(REPORT_DIR, `chain-stake-${ts}.json`);
       await writeFile(
         stakeReportPath,
         JSON.stringify(
@@ -131,7 +141,12 @@ async function main(): Promise<void> {
       );
       console.log(`[e2e] chain-stake report=${stakeReportPath}`);
     }
+    completed = true;
   } finally {
+    if ((completed && KEEP_ALIVE_ON_SUCCESS) || (!completed && KEEP_ALIVE_ON_FAILURE)) {
+      printKeepAliveInfo({ completed, reportPath, stakeReportPath, consoleAvailable: Boolean(consoleProcess) });
+      await waitUntilInterrupted();
+    }
     await stopChildren();
     coordinator.kill("SIGTERM");
     consoleProcess?.kill("SIGTERM");
@@ -235,6 +250,9 @@ async function runDeterministicScenario(): Promise<Json> {
       chainAgentId,
       dutyStatus: "active",
     });
+    if (USE_REAL_STAKE) {
+      await waitForCoordinatorStakeSync(COORDINATOR_URL, API_TOKEN, agent.principalId, 60_000);
+    }
     await action("AddMember", guardian, {
       organizationId: orgId,
       principalId: agent.principalId,
@@ -361,8 +379,7 @@ async function runDeterministicScenario(): Promise<Json> {
     }
   }
 
-  const events = await list<Json>("/events", { limit: 200 });
-  assertEventTypes(events, [
+  const requiredEventTypes = [
     "ObservationTaskCreated",
     "AssignmentOffered",
     "AssignmentAccepted",
@@ -377,7 +394,11 @@ async function runDeterministicScenario(): Promise<Json> {
     "RewardIntentCreated",
     "SettlementConfirmed",
     "KnowledgeEntryUpdated",
-  ]);
+  ];
+  const events = (await Promise.all(
+    requiredEventTypes.map((type) => list<Json>("/events", { type, limit: 200 })),
+  )).flat();
+  assertEventTypes(events, requiredEventTypes);
 
   return {
     mode: USE_REAL_STAKE ? "real-stake" : "mock-stake",
@@ -442,7 +463,7 @@ async function startCoordinator(): Promise<ChildProcessWithoutNullStreams> {
       DATABASE_URL: `file:${dbPath}`,
       ENABLE_DEV_ROUTES: "true",
       LOG_LEVEL: "warn",
-      GOVERNANCE_BACKENDS: "",
+      GOVERNANCE_BACKENDS: "none",
       ASSIGNMENT_EXPIRY_INTERVAL_MS: process.env.ASSIGNMENT_EXPIRY_INTERVAL_MS ?? "250",
       ...stakeEnv,
     },
@@ -455,11 +476,15 @@ async function startCoordinator(): Promise<ChildProcessWithoutNullStreams> {
 }
 
 async function startConsole(): Promise<ChildProcessWithoutNullStreams> {
-  const child = spawn("pnpm", ["--dir", path.resolve(ROOT, "../vibly-console"), "dev", "--", "-p", String(CONSOLE_PORT)], {
+  const consoleOrigin = `http://localhost:${CONSOLE_PORT}`;
+  const child = spawn("pnpm", ["--dir", path.resolve(ROOT, "../vibly-console"), "exec", "next", "dev", "--webpack", "-p", String(CONSOLE_PORT)], {
     env: {
       ...process.env,
       COORDINATOR_URL,
+      NEXT_PUBLIC_COORDINATOR_URL: COORDINATOR_URL,
       COORDINATOR_API_TOKEN: API_TOKEN,
+      AUTH_URL: consoleOrigin,
+      NEXTAUTH_URL: consoleOrigin,
       AUTH_SECRET: "vibly-e2e-local-secret",
       AUTH_DEV_CREDENTIALS: "true",
       PORT: String(CONSOLE_PORT),
@@ -468,7 +493,7 @@ async function startConsole(): Promise<ChildProcessWithoutNullStreams> {
   });
   pipeChild("console", child);
   children.push(child);
-  await waitForHttp(`http://127.0.0.1:${CONSOLE_PORT}/login`, 60_000);
+  await waitForHttp(`${consoleOrigin}/login`, 60_000);
   return child;
 }
 
@@ -515,7 +540,7 @@ async function startAgentDaemons(agents: AgentConfig[], projectId: string): Prom
 }
 
 async function smokeConsole(projectId: string): Promise<void> {
-  const response = await fetch(`http://127.0.0.1:${CONSOLE_PORT}/login`);
+  const response = await fetch(`http://127.0.0.1:${CONSOLE_PORT}/`);
   if (!response.ok) throw new Error(`Console smoke failed: HTTP ${response.status}`);
   console.log(`[e2e] console smoke passed for project ${projectId}`);
 }
@@ -615,7 +640,11 @@ async function waitForHttp(url: string, timeoutMs: number): Promise<void> {
 function assertEventTypes(events: Json[], required: string[]): void {
   const types = new Set(events.map((event) => String(event.type)));
   const missing = required.filter((type) => !types.has(type));
-  if (missing.length > 0) throw new Error(`Missing event types: ${missing.join(", ")}`);
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing event types: ${missing.join(", ")}. Fetched ${events.length} events; saw: ${[...types].slice(0, 80).join(", ")}`,
+    );
+  }
 }
 
 async function loadYaml<T>(file: string): Promise<T> {
@@ -644,16 +673,65 @@ function fakeChild(): ChildProcessWithoutNullStreams {
   return { kill: () => true } as ChildProcessWithoutNullStreams;
 }
 
+function printKeepAliveInfo(input: {
+  completed: boolean;
+  reportPath?: string;
+  stakeReportPath?: string;
+  consoleAvailable: boolean;
+}): void {
+  console.log("");
+  console.log(`[e2e] Keep-alive mode enabled after ${input.completed ? "success" : "failure"}.`);
+  console.log("[e2e] Processes and data are being left running for inspection.");
+  console.log(`[e2e] Coordinator: ${COORDINATOR_URL}`);
+  if (input.consoleAvailable) {
+    console.log(`[e2e] Console: http://localhost:${CONSOLE_PORT}`);
+    console.log(`[e2e] Console (127.0.0.1): http://127.0.0.1:${CONSOLE_PORT}`);
+    const networkAddress = getFirstNetworkAddress();
+    if (networkAddress) console.log(`[e2e] Console (WSL/LAN): http://${networkAddress}:${CONSOLE_PORT}`);
+    console.log("[e2e] Use one Console host consistently after sign-in; localhost is preferred for browser session cookies and HMR.");
+  } else {
+    console.log("[e2e] Console: not started");
+  }
+  if (indexerHandle) console.log(`[e2e] Indexer GraphQL: ${indexerHandle.graphqlUrl}`);
+  if (soloNodeHandle) console.log(`[e2e] Chain RPC: ${soloNodeHandle.wsUrl}`);
+  if (input.reportPath) console.log(`[e2e] Deterministic report: ${input.reportPath}`);
+  if (input.stakeReportPath) console.log(`[e2e] Chain stake report: ${input.stakeReportPath}`);
+  console.log("[e2e] Press Ctrl+C to stop child processes. Docker volumes and SQLite data are kept.");
+  console.log("[e2e] To clean indexer state later: cd ../vibly-indexer && docker compose down -v --remove-orphans");
+}
+
+async function waitUntilInterrupted(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    process.once("SIGINT", resolve);
+    process.once("SIGTERM", resolve);
+  });
+}
+
+function getFirstNetworkAddress(): string | undefined {
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family === "IPv4" && !entry.internal) return entry.address;
+    }
+  }
+  return undefined;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 process.once("SIGINT", () => {
-  void stopChildren().finally(() => process.exit(130));
+  void cleanupForSignal().finally(() => process.exit(130));
 });
 process.once("SIGTERM", () => {
-  void stopChildren().finally(() => process.exit(143));
+  void cleanupForSignal().finally(() => process.exit(143));
 });
+
+async function cleanupForSignal(): Promise<void> {
+  await stopChildren();
+  if (indexerHandle && !KEEP_ALIVE) await stopIndexer();
+  if (soloNodeHandle) await stopSoloNode(soloNodeHandle);
+}
 
 main()
   .then(() => process.exit(0))

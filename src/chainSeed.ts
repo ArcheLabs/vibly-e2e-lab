@@ -14,7 +14,8 @@
  *
  * After bonding, the helpers wait for:
  *  - the indexer GraphQL to reflect an active ledger for the agent
- *  - the coordinator stake projection to show status=active
+ *  - the coordinator stake projection to show status=active after the runner
+ *    registers the coordinator AgentProfile with the chain ids
  */
 
 import { spawn } from "node:child_process";
@@ -105,11 +106,6 @@ export async function seedChainAgent(input: ChainSeedInput): Promise<ChainSeedRe
   console.log(`[chain-seed] Waiting for indexer ledger (chainAgentId=${chainAgentId.slice(0, 12)}…)…`);
   const indexerLedger = await waitForIndexerActiveLedger(input.graphqlUrl, chainAgentId, 120_000);
   console.log(`[chain-seed] Indexer ledger confirmed active for ${input.agentId}`);
-
-  // ── Step 5: Wait for coordinator stake sync ───────────────────────────────
-  console.log(`[chain-seed] Waiting for coordinator stake sync (principalId=${input.agentId})…`);
-  await waitForCoordinatorStakeSync(input.coordinatorUrl, input.apiToken, input.agentId, 60_000);
-  console.log(`[chain-seed] Coordinator stake confirmed active for ${input.agentId}`);
 
   return {
     agentId: input.agentId,

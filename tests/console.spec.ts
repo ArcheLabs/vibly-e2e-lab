@@ -40,23 +40,18 @@ test.beforeAll(async () => {
   report = await loadLatestReport();
 });
 
-test("console loads login page", async ({ page }: { page: Page }) => {
-  const res = await page.goto(`${CONSOLE_BASE}/login`);
+test("anonymous homepage loads public feed shell", async ({ page }: { page: Page }) => {
+  const res = await page.goto(`${CONSOLE_BASE}/`);
   expect(res?.ok() ?? res?.status()).toBeTruthy();
-  // The page should contain something indicating it's the Vibly console
   const body = await page.textContent("body");
   expect(body?.length).toBeGreaterThan(0);
 });
 
-test("project feed page loads and shows key events", async ({ page }: { page: Page }) => {
-  const slug = report.projectSlug ?? report.projectId;
-  if (!slug) test.skip();
-  await page.goto(`${CONSOLE_BASE}/projects/${slug}/feed`);
+test("anonymous organizations page loads", async ({ page }: { page: Page }) => {
+  await page.goto(`${CONSOLE_BASE}/organizations`);
   await expect(page.locator("body")).not.toBeEmpty();
-  // Feed should contain at least one event entry
   const body = await page.textContent("body");
-  const hasContent = (body?.length ?? 0) > 100;
-  expect(hasContent).toBe(true);
+  expect((body?.length ?? 0) > 50).toBe(true);
 });
 
 test("project detail page loads", async ({ page }: { page: Page }) => {
@@ -64,6 +59,29 @@ test("project detail page loads", async ({ page }: { page: Page }) => {
   if (!slug) test.skip();
   await page.goto(`${CONSOLE_BASE}/projects/${slug}`);
   await expect(page.locator("body")).not.toBeEmpty();
+  const title = await page.evaluate(() => document.title);
+  expect(title).not.toContain("404");
+});
+
+test("agent detail page loads anonymously", async ({ page }: { page: Page }) => {
+  const response = await fetch(`${CONSOLE_BASE}/api/coordinator/agents?limit=1`);
+  if (!response.ok) test.skip();
+  const body = await response.json() as { data?: unknown; ok?: boolean };
+  const data = body.data;
+  const first = Array.isArray(data) ? data[0] : (data && typeof data === "object" && Array.isArray((data as { items?: unknown[] }).items) ? (data as { items: unknown[] }).items[0] : undefined);
+  if (!first || typeof first !== "object") test.skip();
+  const agentId = String((first as { id?: string }).id ?? "");
+  if (!agentId) test.skip();
+
+  await page.goto(`${CONSOLE_BASE}/agents/${encodeURIComponent(agentId)}`);
+  await expect(page.locator("body")).not.toBeEmpty();
+  const title = await page.evaluate(() => document.title);
+  expect(title).not.toContain("404");
+});
+
+test("anonymous private inbox API is rejected", async ({ page }: { page: Page }) => {
+  const response = await page.request.get(`${CONSOLE_BASE}/api/coordinator/agents/demo/inbox?limit=1`);
+  expect(response.status()).toBe(401);
 });
 
 test("proposal detail page loads and shows correct status", async ({ page }: { page: Page }) => {
