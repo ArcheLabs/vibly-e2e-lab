@@ -11,6 +11,20 @@ cp .env.example .env
 # Full run with real chain + indexer (default)
 pnpm e2e:local
 
+# Live LLM run with multiple real vibly-client daemons.
+# If VIBLY_E2E_RUN_NAME is unset, this creates a fresh timestamped run.
+# This keeps Coordinator/Console/agents running after success for inspection.
+pnpm e2e:live-llm
+
+# Reset a specific named run and start it fresh
+VIBLY_E2E_RUN_NAME=my-run pnpm e2e:live-llm:fresh
+
+# CI-style live run that exits and cleans up after success
+pnpm e2e:live-llm:ci
+
+# Resume a named live LLM run
+VIBLY_E2E_RUN_NAME=my-run pnpm e2e:live-llm:resume
+
 # Skip chain/indexer — use mock stake instead
 VIBLY_E2E_MOCK_STAKE=true pnpm e2e:local
 
@@ -24,6 +38,9 @@ pnpm e2e:stake
 Reports are written to `reports/` after every run:
 - `reports/deterministic-<ts>.json` — full scenario trace
 - `reports/chain-stake-<ts>.json` — stake mode, SSE timing, per-agent chain seed results (real-stake mode only)
+- `reports/live-llm-<ts>.json` — persistent live LLM run summary
+- `reports/live-llm-content-<ts>.md` — readable generated content: observations, proposal body, discussion, reviews, artifacts, and knowledge entries
+- `data/live-runs/<runName>/state.json` — resumable live LLM checkpoint state
 
 ## Scenarios
 
@@ -55,6 +72,10 @@ Four sub-scenarios exercising the real-chain stake pipeline:
 ### Semi-autonomous / LLM mode (`src/semi-autonomous.ts`)
 
 LLM-driven observer using an OpenAI-compatible endpoint. Skipped gracefully when `OPENAI_API_KEY` is not set.
+
+### Live LLM mode (`src/live-vibing-math.ts`)
+
+Starts multiple real `vibly-client daemon start` processes with `daemon.llmE2E=true`. Each daemon reads its own inbox, calls the configured OpenAI-compatible LLM endpoint, and submits normal Coordinator `ActionIntent`s for observations, discussions, proposals, reviews, artifacts, and reward claims. The runner only seeds/resumes the scenario and waits for milestones.
 
 ## Real-chain pipeline
 
@@ -104,6 +125,38 @@ When `VIBLY_E2E_MOCK_STAKE` is unset (the default), the runner:
 | `OPENAI_BASE_URL` | `https://api.deepseek.com/v1` | API base URL |
 | `OPENAI_MODEL` | `deepseek-chat` | Model name |
 
+### Live LLM mode
+
+| Variable | Default | Description |
+|---|---|---|
+| `VIBLY_E2E_RUN_NAME` | timestamped run | Durable run name used for `data/live-runs/<runName>/`; set it for resume |
+| `VIBLY_E2E_RESET_RUN` | `false` | Delete existing state for the named run before starting |
+| `VIBLY_E2E_PAUSE_AT` | *(unset)* | Pause boundary: `after-seed`, `after-first-observation`, `after-proposal`, `after-artifacts`, `after-knowledge-sync`, `before-second-observation` |
+| `VIBLY_E2E_AGENT_CHAIN_MAP` | *(unset)* | JSON map for external/testnet preseeded stake bindings, keyed by agent id or principal id |
+| `VIBLY_E2E_TESTNET_SEED` | `false` | If `true`, seed testnet chain identities/stake using `vibly-client` CLI instead of using preseeded bindings |
+| `VIBLY_E2E_CHAIN_RPC_URL` | *(unset)* | External/testnet chain RPC URL when seeding testnet |
+| `VIBLY_E2E_TESTNET_BOND_AMOUNT` | `100` | Bond amount for testnet seed mode |
+| `VIBLY_E2E_SKIP_CONSOLE` | `false` | Skip starting Console during live LLM runs |
+| `VIBLY_E2E_KEEP_ALIVE_ON_SUCCESS` | script-dependent | Keep services running after success; enabled by `pnpm e2e:live-llm` |
+
+Live LLM examples:
+
+```bash
+# Local live run. Use mock stake for the fastest smoke path.
+VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live pnpm e2e:live-llm
+
+# Pause at a named boundary, then resume later.
+VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live VIBLY_E2E_PAUSE_AT=after-proposal pnpm e2e:live-llm
+VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live pnpm e2e:live-llm:resume
+
+# Attach to an existing testnet coordinator. Preseeded agent bindings can be supplied as JSON.
+COORDINATOR_URL=https://coordinator.example \
+COORDINATOR_API_TOKEN=... \
+VIBLY_E2E_RUN_NAME=testnet-live \
+VIBLY_E2E_AGENT_CHAIN_MAP='{"observer-agent-1":{"identityId":"...","chainAgentId":"..."}}' \
+pnpm e2e:live-llm:testnet
+```
+
 ## Scenario: Vibing Math
 
 The test scenario lives in `scenarios/vibing-math/`:
@@ -131,6 +184,11 @@ knowledge/         Seed knowledge entries (literature index, Goldbach background
 | `pnpm e2e:local` | Full run with real chain + indexer |
 | `pnpm e2e:local:mock-stake` | Full run with mock stake (no chain/indexer) |
 | `pnpm e2e:local:no-console` | Full run, skip console smoke |
+| `pnpm e2e:live-llm` | Persistent live LLM multi-agent Vibing Math run |
+| `pnpm e2e:live-llm:ci` | Live LLM run that exits and cleans up after success |
+| `pnpm e2e:live-llm:fresh` | Reset a named live LLM run and start it fresh |
+| `pnpm e2e:live-llm:resume` | Resume a named live LLM run |
+| `pnpm e2e:live-llm:testnet` | Attach live LLM run to external/testnet coordinator |
 | `pnpm e2e:stake` | Stake scenarios A-D only |
 | `pnpm e2e:stake:unbond` | Stake scenarios with `VIBLY_E2E_UNBOND=true` |
 | `pnpm e2e:stake:stale-indexer` | Stake scenarios with stale indexer simulation |
