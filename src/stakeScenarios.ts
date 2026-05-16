@@ -5,6 +5,7 @@
  *  Scenario B — Agent-initiated unbond: same semantics via agent signer.
  *  Scenario C — Release block when unfinished duties exist.
  *  Scenario D — Clear release after duties complete.
+ *  Stale indexer — existing active stake remains eligible while health degrades.
  *
  * Entry point: `pnpm e2e:stake` (runs all four in sequence).
  * Individual modes via VIBLY_E2E_UNBOND / VIBLY_E2E_STALE_INDEXER env vars.
@@ -71,6 +72,7 @@ export interface StakeScenariosReport {
   scenarioB: "passed" | "skipped" | string;
   scenarioC: "passed" | "skipped" | string;
   scenarioD: "passed" | "skipped" | string;
+  staleIndexer: "passed" | "skipped" | string;
 }
 
 export async function runStakeScenarios(
@@ -81,10 +83,19 @@ export async function runStakeScenarios(
     scenarioB: "skipped",
     scenarioC: "skipped",
     scenarioD: "skipped",
+    staleIndexer: "skipped",
   };
 
   if (process.env.VIBLY_E2E_STALE_INDEXER === "true") {
-    console.log("[stake] VIBLY_E2E_STALE_INDEXER mode — skipping unbond scenarios");
+    console.log("[stake] VIBLY_E2E_STALE_INDEXER mode — verifying coordinator does not freeze");
+    try {
+      await scenarioStaleIndexer(ctx);
+      report.staleIndexer = "passed";
+      console.log("[stake] stale indexer scenario passed");
+    } catch (err) {
+      report.staleIndexer = String(err);
+      console.error(`[stake] stale indexer scenario FAILED: ${String(err)}`);
+    }
     return report;
   }
 
@@ -314,6 +325,32 @@ async function scenarioCandD(
   return { scenarioC: scenarioCResult, scenarioD: "passed" };
 }
 
+async function scenarioStaleIndexer(ctx: StakeScenariosContext): Promise<void> {
+  await stopIndexer();
+  const activeEntry = Object.entries(ctx.seeds).find(([, seed]) => seed.indexerLedger.status === "active");
+  if (!activeEntry) throw new Error("no active seeded ledger available for stale-indexer scenario");
+  const principalId = ctx.principalIds[activeEntry[0]];
+  if (!principalId) throw new Error("no principal IDs available for stale-indexer scenario");
+
+  await waitForIndexerHealthStatus(ctx, ["degraded", "down"], 45_000);
+  await waitForCoordinatorLedgerStatus(ctx.coordinatorUrl, ctx.apiToken, principalId, "active", 10_000);
+
+  const taskId = await coordinatorAction(ctx, "CreateObservationTask", ctx.guardianPrincipalId, {
+    organizationId: ctx.organizationId,
+    projectId: ctx.projectId,
+    title: "Stale indexer eligibility probe",
+    description: "Existing active stake should remain eligible while indexer health is degraded.",
+    mechanismId: "mechanism_vibing_math_main",
+  }).then((r) => r.aggregateRef.id);
+
+  const assignee = await waitFor(
+    () => findAnyAssigneeExcluding(ctx, taskId, ""),
+    "assignment while indexer health is stale",
+    45_000,
+  );
+  if (!assignee) throw new Error("coordinator did not assign task while indexer was stale");
+}
+
 // ── Coordinator helpers ───────────────────────────────────────────────────────
 
 async function coordinatorAction(
@@ -426,6 +463,23 @@ async function waitForCoordinatorReleaseBlocked(
       return ledger?.releaseBlocked === blocked ? true : undefined;
     },
     `coordinator releaseBlocked=${String(blocked)} for ${principalId}`,
+    timeoutMs,
+  );
+}
+
+async function waitForIndexerHealthStatus(
+  ctx: StakeScenariosContext,
+  statuses: Array<"healthy" | "degraded" | "down">,
+  timeoutMs: number,
+): Promise<void> {
+  await waitFor(
+    async () => {
+      const body = await coordinatorGet<Json>(ctx, "/agent-stake-indexer-health");
+      const health = unwrapKey<Json | undefined>(body, "health");
+      const status = health?.status;
+      return typeof status === "string" && statuses.includes(status as never) ? true : undefined;
+    },
+    `indexer health ${statuses.join("/")}`,
     timeoutMs,
   );
 }

@@ -61,7 +61,20 @@ export async function startIndexer(chainRpcPort: number): Promise<IndexerHandle>
   }
 
   try {
-    await waitForIndexerReady(graphqlUrl, 180_000);
+    // Two-stage readiness: wait 60 s first.  If the graphql-engine has a stale
+    // PostGraphile schema cache (introspected before schema migration settled) or
+    // is stuck in a crash-restart loop, restart it and allow up to 4 more minutes.
+    try {
+      await waitForIndexerReady(graphqlUrl, 60_000, { silent: true });
+    } catch {
+      console.log("[e2e] Indexer GraphQL not ready after 60s — restarting graphql-engine for fresh schema introspection…");
+      try {
+        execSync("docker compose restart graphql-engine", { cwd: INDEXER_DIR, stdio: "pipe" });
+      } catch {
+        // best-effort: waitForIndexerReady will surface the real error
+      }
+      await waitForIndexerReady(graphqlUrl, 240_000, { silent: true });
+    }
     console.log(`[e2e] Indexer GraphQL ready at ${graphqlUrl}`);
   } catch (err) {
     printIndexerLogs();
@@ -80,10 +93,14 @@ export async function startIndexer(chainRpcPort: number): Promise<IndexerHandle>
 /**
  * Poll the GraphQL endpoint until it returns a valid response with no errors.
  * Uses a lightweight `agentStakeLedgers { totalCount }` probe.
+ *
+ * @param silent - When true, suppresses the indexer log dump on timeout (useful
+ *   when the caller intends to restart graphql-engine and retry).
  */
 export async function waitForIndexerReady(
   graphqlUrl: string,
   timeoutMs = 180_000,
+  { silent = false }: { silent?: boolean } = {},
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -105,7 +122,7 @@ export async function waitForIndexerReady(
     }
     await sleep(3_000);
   }
-  printIndexerLogs();
+  if (!silent) printIndexerLogs();
   throw new Error(
     `Indexer GraphQL at ${graphqlUrl} did not become ready within ${timeoutMs}ms`,
   );

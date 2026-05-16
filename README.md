@@ -88,7 +88,6 @@ When `VIBLY_E2E_MOCK_STAKE` is unset (the default), the runner:
 | `VIBLY_E2E_EXTERNAL_COORDINATOR` | `false` | Connect to an already-running coordinator |
 | `VIBLY_E2E_COORDINATOR_PORT` | `8787` | Coordinator port |
 | `COORDINATOR_API_TOKEN` | `dev-token` | API token |
-| `AGENT_STAKE_FRESHNESS_MS` | `30000` (real) / `600000` (mock) | Maximum stake ledger age |
 
 ### Console & SSE
 

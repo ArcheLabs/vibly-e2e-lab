@@ -304,7 +304,7 @@ async function runDeterministicScenario(): Promise<Json> {
   await waitFor<Json>(() => get<Json>(`/proposals/${proposalId}`).then((body) => unwrapKey<Json>(body, "proposal"))
     .then((item) => item.status === "accepted" ? item : undefined), "accepted proposal", 120_000);
 
-  const tasks = await waitFor<Json[]>(() => list<Json>("/tasks", { organizationId: orgId, status: "available" })
+  const tasks = await waitFor<Json[]>(() => list<Json>("/tasks", { organizationId: orgId })
     .then((items) => items.filter((item) => item.proposalId === proposalId).length >= 2 ? items.filter((item) => item.proposalId === proposalId) : undefined), "proposal tasks");
 
   const artifactIds = await waitFor<string[]>(() => list<Json>("/artifacts", { organizationId: orgId })
@@ -443,13 +443,10 @@ async function startCoordinator(): Promise<ChildProcessWithoutNullStreams> {
     ? {
         SUBSTRATE_INDEXER_URL: indexerHandle?.graphqlUrl ?? "http://127.0.0.1:3010/graphql",
         AGENT_STAKE_SYNC_INTERVAL_MS: "500",
-        AGENT_STAKE_FRESHNESS_MS: process.env.AGENT_STAKE_FRESHNESS_MS ?? "30000",
         SUBSTRATE_STAKE_TX_MODE: "fixture",
         SUBSTRATE_CHAIN_ID: CHAIN_ID,
       }
-    : {
-        AGENT_STAKE_FRESHNESS_MS: process.env.AGENT_STAKE_FRESHNESS_MS ?? "600000",
-      };
+    : {};
 
   const child = spawn("pnpm", ["--dir", path.resolve(ROOT, "../vibly-coordinator"), "dev"], {
     env: {
@@ -540,7 +537,7 @@ async function startAgentDaemons(agents: AgentConfig[], projectId: string): Prom
 }
 
 async function smokeConsole(projectId: string): Promise<void> {
-  const response = await fetch(`http://127.0.0.1:${CONSOLE_PORT}/`);
+  const response = await fetch(`http://127.0.0.1:${CONSOLE_PORT}/login`);
   if (!response.ok) throw new Error(`Console smoke failed: HTTP ${response.status}`);
   console.log(`[e2e] console smoke passed for project ${projectId}`);
 }
