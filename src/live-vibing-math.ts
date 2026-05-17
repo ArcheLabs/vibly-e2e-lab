@@ -648,7 +648,7 @@ async function buildContentReport(state: LiveRunState): Promise<string> {
     ...observations.map((item) => [
       `### ${String(item.title ?? item.id ?? "Observation")}`,
       ``,
-      String(item.content ?? ""),
+      observationBody(item),
       ``,
     ].join("\n")),
     `## Proposals`,
@@ -693,6 +693,64 @@ async function buildContentReport(state: LiveRunState): Promise<string> {
       ``,
     ].join("\n")),
   ].join("\n");
+}
+
+function observationBody(item: Json): string {
+  const direct = String(item.content ?? item.body ?? item.summary ?? "").trim();
+  if (direct) return direct;
+
+  const findings = Array.isArray(item.findings)
+    ? (item.findings as Json[])
+      .map((entry) => {
+        const title = String(entry.title ?? entry.name ?? "").trim();
+        const description = String(entry.description ?? entry.detail ?? entry.content ?? "").trim();
+        if (title && description) return `- ${title}: ${description}`;
+        if (title) return `- ${title}`;
+        if (description) return `- ${description}`;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n")
+    : "";
+
+  const risks = Array.isArray(item.risks)
+    ? (item.risks as unknown[])
+      .map((entry) => {
+        if (typeof entry === "string") return entry.trim();
+        if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+          const record = entry as Json;
+          return String(record.title ?? record.reason ?? record.description ?? "").trim();
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .map((line) => `- ${line}`)
+      .join("\n")
+    : "";
+
+  const actions = Array.isArray(item.suggestedActions)
+    ? (item.suggestedActions as Json[])
+      .map((entry) => {
+        const actionType = String(entry.type ?? "").trim();
+        const title = String(entry.title ?? entry.name ?? "").trim();
+        const description = String(entry.description ?? entry.detail ?? entry.content ?? "").trim();
+        const head = [actionType, title].filter(Boolean).join(" · ");
+        if (head && description) return `- ${head}: ${description}`;
+        if (head) return `- ${head}`;
+        if (description) return `- ${description}`;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n")
+    : "";
+
+  const sections = [
+    findings ? `Findings\n${findings}` : "",
+    risks ? `Risks\n${risks}` : "",
+    actions ? `Suggested Actions\n${actions}` : "",
+  ].filter(Boolean);
+
+  return sections.join("\n\n");
 }
 
 function discussionSection(discussion: Json): string {
