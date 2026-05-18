@@ -250,7 +250,7 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
   }).then((body) => unwrapKey<Json>(body, "principal"));
   const guardian = String(guardianPrincipal.id);
   const orgId = await action("CreateOrganization", guardian, {
-    name: `Live Vibing Math ${state.runName}`,
+    name: "Live Vibing Math",
     description: "Persistent live LLM multi-agent E2E organization",
   }).then((result) => result.aggregateRef.id);
   await action("UpdateHandbook", guardian, {
