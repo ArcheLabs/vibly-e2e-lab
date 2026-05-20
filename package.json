@@ -22,6 +22,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@polkadot/api": "^16.5.6",
+    "@polkadot/keyring": "^14.0.3",
+    "@polkadot/util-crypto": "^14.0.3",
     "@vibly/coordinator-http-contract": "file:../vibly-coordinator-http-contract",
     "openai": "^6.37.0",
     "yaml": "^2.8.1"
