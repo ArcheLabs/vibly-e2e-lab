@@ -14,6 +14,7 @@
     "e2e:live-llm:resume": "VIBLY_E2E_RESUME=true VIBLY_E2E_KEEP_ALIVE_ON_SUCCESS=true tsx --env-file=.env src/live-vibing-math.ts",
     "e2e:live-llm:testnet": "VIBLY_E2E_EXTERNAL_COORDINATOR=true VIBLY_E2E_EXTERNAL_CHAIN=true VIBLY_E2E_EXTERNAL_INDEXER=true VIBLY_E2E_KEEP_ALIVE_ON_SUCCESS=true tsx --env-file=.env src/live-vibing-math.ts",
     "e2e:get-vib": "tsx --env-file=.env src/get-vib.ts",
+    "e2e:get-vib:polkadot-local": "tsx --env-file=.env src/get-vib-polkadot-local.ts",
     "e2e:stake": "tsx --env-file=.env src/stakeScenarios.ts",
     "e2e:stake:unbond": "VIBLY_E2E_UNBOND=true tsx --env-file=.env src/stakeScenarios.ts",
     "e2e:stake:stale-indexer": "VIBLY_E2E_STALE_INDEXER=true tsx --env-file=.env src/stakeScenarios.ts",
