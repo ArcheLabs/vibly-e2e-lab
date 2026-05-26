@@ -65,9 +65,14 @@ COORDINATOR_URL=https://coordinator.example \
 COORDINATOR_API_TOKEN=... \
 VIBLY_E2E_RUN_NAME=testnet-live \
 pnpm e2e:live-llm:testnet
+
+# 本地运行并启用 Get VIB 本地 relay 配置（用于 Console 的 Get VIB 页面联调）
+VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live pnpm e2e:live-llm:get-vib-local
 ```
 
 `VIBLY_E2E_PAUSE_AT` 可取：`after-seed`、`after-first-observation`、`after-proposal`、`after-artifacts`、`after-knowledge-sync`、`before-second-observation`。
+`VIBLY_E2E_COORDINATOR_START_TIMEOUT_MS` 可用于放宽本地 coordinator 启动等待时间（默认 120000ms）。
+`VIBLY_E2E_ENABLE_GET_VIB_LOCAL=true` 时，会为 coordinator 注入本地 Get VIB relay 相关配置；可用 `VIBLY_E2E_GET_VIB_RELAY_RPC` 与 `VIBLY_E2E_GET_VIB_DEPOSIT_ADDRESS` 覆盖默认值。
 测试网默认使用已存在 / 预先质押的 agent 身份；如需显式提供链上绑定，可设置 `VIBLY_E2E_AGENT_CHAIN_MAP` JSON。
 `pnpm e2e:live-llm`、`pnpm e2e:live-llm:resume` 和 `pnpm e2e:live-llm:testnet` 默认会在成功后保留 Coordinator、Console 和 agent daemon 进程，并打印 Console URL。agent daemon 会继续运行并监听新的任务/义务；查看结束后按 Ctrl+C，会执行清理。需要自动退出时使用 `pnpm e2e:live-llm:ci`。
 
@@ -88,3 +93,12 @@ knowledge/         — 初始知识条目（文献索引、哥德巴赫背景、
 - 所有协调操作均通过 `ActionIntent` HTTP 调用完成，不直接修改状态。
 - 事件查询时传入 `?type=<EventType>` 过滤参数，绕过服务端 `max=200` 分页上限，避免高负载运行时事件被截断。
 - 本测试实验室不依赖 `vibly-chain` 或 `vibly-indexer`，这两者不在本地 E2E 范围内。
+
+## npm scripts（补充）
+
+| 命令 | 说明 |
+|---|---|
+| `pnpm e2e:get-vib` | Get VIB 全流程冒烟：获取配置、报价、创建订单、确认入账、生成 manifest、查询 summary/proof/records；配置 `VIBLY_E2E_GET_VIB_CHAIN_RPC` 时会额外执行链上 claim 验证 |
+| `pnpm e2e:get-vib:polkadot-local` | 面向本地 Polkadot relay + 本地链联调的 Get VIB 流程：发送 relay DOT、等待观察入账并 finalize，然后执行链上 claim 验证 |
+| `pnpm e2e:live-llm:get-vib-local` | Live LLM 运行时启用本地 Get VIB relay 配置，便于 Console 的 Get VIB 页面联调 |
+| `pnpm e2e:live-llm:resume:get-vib-local` | 与上条相同，但用于 resume 模式 |

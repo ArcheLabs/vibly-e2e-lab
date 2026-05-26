@@ -36,9 +36,12 @@ const DATA_DIR = path.join(ROOT, "data");
 const COORDINATOR_PORT = Number(process.env.VIBLY_E2E_COORDINATOR_PORT ?? "8787");
 const CONSOLE_PORT = Number(process.env.VIBLY_E2E_CONSOLE_PORT ?? "3001");
 const COORDINATOR_URL = process.env.COORDINATOR_URL ?? `http://127.0.0.1:${COORDINATOR_PORT}`;
+const COORDINATOR_START_TIMEOUT_MS = Number(process.env.VIBLY_E2E_COORDINATOR_START_TIMEOUT_MS ?? "120000");
 const API_TOKEN = process.env.COORDINATOR_API_TOKEN ?? "dev-token";
 const CHAIN_ID = process.env.VIBLY_E2E_CHAIN_ID ?? "substrate:vibly-solo";
 const USE_REAL_STAKE = process.env.VIBLY_E2E_MOCK_STAKE !== "true";
+const ENABLE_GET_VIB_LOCAL = process.env.VIBLY_E2E_ENABLE_GET_VIB_LOCAL === "true";
+const DEFAULT_GET_VIB_DEPOSIT_ADDRESS = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
 const EXTERNAL_COORDINATOR = process.env.VIBLY_E2E_EXTERNAL_COORDINATOR === "true";
 const TESTNET_SEED = process.env.VIBLY_E2E_TESTNET_SEED === "true";
 const RESUME_RUN = process.env.VIBLY_E2E_RESUME === "true";
@@ -515,7 +518,7 @@ async function startAgentDaemons(agents: AgentConfig[], projectId: string): Prom
 
 async function startCoordinator(runRoot: string, preserveDb: boolean): Promise<ChildProcessWithoutNullStreams> {
   if (EXTERNAL_COORDINATOR) {
-    await waitForHealth(COORDINATOR_URL);
+    await waitForHealth(COORDINATOR_URL, COORDINATOR_START_TIMEOUT_MS);
     return fakeChild();
   }
   const dbPath = path.join(runRoot, "coordinator.sqlite");
@@ -534,6 +537,17 @@ async function startCoordinator(runRoot: string, preserveDb: boolean): Promise<C
       }
     : {};
 
+  const getVibLocalEnv: Record<string, string> = ENABLE_GET_VIB_LOCAL
+    ? {
+        VIBLY_DOT_RECEIVING_ADDRESS: process.env.VIBLY_DOT_RECEIVING_ADDRESS ?? process.env.VIBLY_E2E_GET_VIB_DEPOSIT_ADDRESS ?? DEFAULT_GET_VIB_DEPOSIT_ADDRESS,
+        GET_VIB_RELAY_RPC_URL: process.env.GET_VIB_RELAY_RPC_URL ?? process.env.VIBLY_E2E_GET_VIB_RELAY_RPC ?? `ws://127.0.0.1:${soloNodeHandle?.rpcPort ?? Number(process.env.VIBLY_E2E_CHAIN_RPC_PORT ?? "9944")}`,
+        GET_VIB_RELAY_CHAIN_ID: process.env.GET_VIB_RELAY_CHAIN_ID ?? process.env.VIBLY_E2E_GET_VIB_RELAY_CHAIN_ID ?? "polkadot-local",
+        GET_VIB_DEPOSIT_SCAN_INTERVAL_MS: process.env.GET_VIB_DEPOSIT_SCAN_INTERVAL_MS ?? process.env.VIBLY_E2E_GET_VIB_SCAN_INTERVAL_MS ?? "1500",
+        GET_VIB_DEPOSIT_FINALITY_BLOCKS: process.env.GET_VIB_DEPOSIT_FINALITY_BLOCKS ?? process.env.VIBLY_E2E_GET_VIB_FINALITY_BLOCKS ?? "1",
+        GET_VIB_RELAY_TOKEN_DECIMALS: process.env.GET_VIB_RELAY_TOKEN_DECIMALS ?? process.env.VIBLY_E2E_GET_VIB_RELAY_DECIMALS ?? "10",
+      }
+    : {};
+
   const child = spawn("pnpm", ["--dir", path.resolve(ROOT, "../vibly-coordinator"), "dev"], {
     env: {
       ...process.env,
@@ -549,12 +563,13 @@ async function startCoordinator(runRoot: string, preserveDb: boolean): Promise<C
       GOVERNANCE_BACKENDS: "none",
       ASSIGNMENT_EXPIRY_INTERVAL_MS: process.env.ASSIGNMENT_EXPIRY_INTERVAL_MS ?? "500",
       ...stakeEnv,
+      ...getVibLocalEnv,
     },
     stdio: "pipe",
   });
   pipeChild("coordinator", child);
   children.push(child);
-  await waitForHealth(COORDINATOR_URL);
+  await waitForHealth(COORDINATOR_URL, COORDINATOR_START_TIMEOUT_MS);
   return child;
 }
 
@@ -844,8 +859,8 @@ async function waitFor<T>(fn: () => Promise<T | undefined>, label: string, timeo
   throw new Error(`Timed out waiting for ${label}${lastError ? `: ${String(lastError)}` : ""}`);
 }
 
-async function waitForHealth(baseUrl: string): Promise<void> {
-  await waitForHttp(`${baseUrl}/health`, 60_000);
+async function waitForHealth(baseUrl: string, timeoutMs = 60_000): Promise<void> {
+  await waitForHttp(`${baseUrl}/health`, timeoutMs);
 }
 
 async function waitForHttp(url: string, timeoutMs: number): Promise<void> {

@@ -130,12 +130,16 @@ When `VIBLY_E2E_MOCK_STAKE` is unset (the default), the runner:
 | Variable | Default | Description |
 |---|---|---|
 | `VIBLY_E2E_RUN_NAME` | timestamped run | Durable run name used for `data/live-runs/<runName>/`; set it for resume |
+| `VIBLY_E2E_COORDINATOR_START_TIMEOUT_MS` | `120000` | Coordinator `/health` startup timeout for local runs |
 | `VIBLY_E2E_RESET_RUN` | `false` | Delete existing state for the named run before starting |
 | `VIBLY_E2E_PAUSE_AT` | *(unset)* | Pause boundary: `after-seed`, `after-first-observation`, `after-proposal`, `after-artifacts`, `after-knowledge-sync`, `before-second-observation` |
 | `VIBLY_E2E_AGENT_CHAIN_MAP` | *(unset)* | JSON map for external/testnet preseeded stake bindings, keyed by agent id or principal id |
 | `VIBLY_E2E_TESTNET_SEED` | `false` | If `true`, seed testnet chain identities/stake using `vibly-client` CLI instead of using preseeded bindings |
 | `VIBLY_E2E_CHAIN_RPC_URL` | *(unset)* | External/testnet chain RPC URL when seeding testnet |
 | `VIBLY_E2E_TESTNET_BOND_AMOUNT` | `100` | Bond amount for testnet seed mode |
+| `VIBLY_E2E_ENABLE_GET_VIB_LOCAL` | `false` | Enable local Get VIB relay watcher wiring for live LLM runs |
+| `VIBLY_E2E_GET_VIB_RELAY_RPC` | local chain ws URL | Override relay RPC for local Get VIB wiring |
+| `VIBLY_E2E_GET_VIB_DEPOSIT_ADDRESS` | Alice dev address | Override local Get VIB deposit address |
 | `VIBLY_E2E_SKIP_CONSOLE` | `false` | Skip starting Console during live LLM runs |
 | `VIBLY_E2E_KEEP_ALIVE_ON_SUCCESS` | script-dependent | Keep services running after success; enabled by `pnpm e2e:live-llm` |
 
@@ -144,6 +148,9 @@ Live LLM examples:
 ```bash
 # Local live run. Use mock stake for the fastest smoke path.
 VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live pnpm e2e:live-llm
+
+# Local live run with Get VIB local relay wiring enabled (for Console Get VIB page smoke).
+VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live pnpm e2e:live-llm:get-vib-local
 
 # Pause at a named boundary, then resume later.
 VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live VIBLY_E2E_PAUSE_AT=after-proposal pnpm e2e:live-llm
@@ -188,7 +195,11 @@ knowledge/         Seed knowledge entries (literature index, Goldbach background
 | `pnpm e2e:live-llm:ci` | Live LLM run that exits and cleans up after success |
 | `pnpm e2e:live-llm:fresh` | Reset a named live LLM run and start it fresh |
 | `pnpm e2e:live-llm:resume` | Resume a named live LLM run |
+| `pnpm e2e:live-llm:get-vib-local` | Live LLM run with local Get VIB relay wiring enabled |
+| `pnpm e2e:live-llm:resume:get-vib-local` | Resume live LLM run with local Get VIB relay wiring enabled |
 | `pnpm e2e:live-llm:testnet` | Attach live LLM run to external/testnet coordinator |
+| `pnpm e2e:get-vib` | Get VIB flow smoke: quote/order/finalize/manifest/summary/proof/records, with optional chain claim when chain RPC is configured |
+| `pnpm e2e:get-vib:polkadot-local` | Local Polkadot relay + local chain Get VIB flow: relay deposit observation/finalize + on-chain claim verification |
 | `pnpm e2e:stake` | Stake scenarios A-D only |
 | `pnpm e2e:stake:unbond` | Stake scenarios with `VIBLY_E2E_UNBOND=true` |
 | `pnpm e2e:stake:stale-indexer` | Stake scenarios with stale indexer simulation |
