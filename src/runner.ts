@@ -12,11 +12,19 @@ import {
   stopSoloNode,
   type SoloNodeHandle,
 } from "./lifecycle/soloNode.js";
+import { resolveUseRealStake } from "./lifecycle/stakeMode.js";
 import {
   startIndexer,
   stopIndexer,
   type IndexerHandle,
 } from "./lifecycle/indexer.js";
+import { assertPortAvailable } from "./lifecycle/ports.js";
+import {
+  localNetworkProfile,
+  publicConsoleNetworkProfiles,
+  serverCoordinatorNetworkProfiles,
+  type E2eNetworkProfile,
+} from "./lifecycle/networkProfiles.js";
 import { seedChainAgent, waitForCoordinatorStakeSync, type ChainSeedReceipt } from "./chainSeed.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
@@ -25,6 +33,7 @@ const REPORT_DIR = path.join(ROOT, "reports");
 const DATA_DIR = path.join(ROOT, "data");
 const COORDINATOR_PORT = Number(process.env.VIBLY_E2E_COORDINATOR_PORT ?? "8787");
 const CONSOLE_PORT = Number(process.env.VIBLY_E2E_CONSOLE_PORT ?? "3001");
+const PAYMENT_CHAIN_RPC_PORT = Number(process.env.VIBLY_E2E_PAYMENT_CHAIN_RPC_PORT ?? "9945");
 const COORDINATOR_URL = process.env.COORDINATOR_URL ?? `http://127.0.0.1:${COORDINATOR_PORT}`;
 const API_TOKEN = process.env.COORDINATOR_API_TOKEN ?? "dev-token";
 const CHAIN_ID = process.env.VIBLY_E2E_CHAIN_ID ?? "substrate:vibly-solo";
@@ -36,12 +45,12 @@ const KEEP_ALIVE_ON_SUCCESS = KEEP_ALIVE || process.env.VIBLY_E2E_KEEP_ALIVE_ON_
 const KEEP_ALIVE_ON_FAILURE = KEEP_ALIVE || process.env.VIBLY_E2E_KEEP_ALIVE_ON_FAILURE === "true";
 
 /**
- * When VIBLY_E2E_MOCK_STAKE=true the runner falls back to the legacy
+ * When VIBLY_E2E_MOCK_STAKE=true the runner uses the legacy
  * UpsertAgentStakeLedger coordinator seed and does NOT start chain/indexer.
- * When false (default) or VIBLY_E2E_USE_REAL_STAKE=true it uses the real
- * chain-backed flow.
+ * By default it prefers the real chain-backed flow, but falls back to mock
+ * stake when no local solo-node binary is available.
  */
-const USE_REAL_STAKE = process.env.VIBLY_E2E_MOCK_STAKE !== "true";
+const USE_REAL_STAKE = resolveUseRealStake("e2e:local");
 
 type AgentConfig = {
   id: string;
@@ -57,25 +66,35 @@ type Json = Record<string, unknown>;
 
 const children: ChildProcessWithoutNullStreams[] = [];
 let soloNodeHandle: SoloNodeHandle | undefined;
+let paymentNodeHandle: SoloNodeHandle | undefined;
 let indexerHandle: IndexerHandle | undefined;
+let localProfile: E2eNetworkProfile | undefined;
 
 async function main(): Promise<void> {
   await mkdir(REPORT_DIR, { recursive: true });
   await mkdir(DATA_DIR, { recursive: true });
 
-  // ── Chain / Indexer lifecycle (real stake mode) ───────────────────────────
+  // ── Chain / payment-chain / indexer lifecycle ─────────────────────────────
+  soloNodeHandle = await startSoloNode({ rpcExternal: true, serviceName: "Vibly chain" });
+  paymentNodeHandle = await startSoloNode({
+    rpcPort: PAYMENT_CHAIN_RPC_PORT,
+    rpcExternal: true,
+    serviceName: "payment chain",
+  });
+  localProfile = localNetworkProfile({
+    coordinatorUrl: COORDINATOR_URL,
+    viblyRpcUrl: soloNodeHandle.wsUrl,
+    paymentRpcUrl: paymentNodeHandle.wsUrl,
+  });
+
   if (USE_REAL_STAKE) {
-    soloNodeHandle = await startSoloNode({ rpcExternal: true });
     indexerHandle = await startIndexer(soloNodeHandle.rpcPort);
   }
 
   const coordinator = await startCoordinator();
   let consoleProcess: ChildProcessWithoutNullStreams | undefined;
   if (process.env.VIBLY_E2E_SKIP_CONSOLE !== "true") {
-    consoleProcess = await startConsole().catch((err) => {
-      console.warn(`[e2e] console unavailable, API flow will continue: ${String(err)}`);
-      return undefined;
-    });
+    consoleProcess = await startConsole();
   }
 
   let completed = false;
@@ -151,6 +170,7 @@ async function main(): Promise<void> {
     coordinator.kill("SIGTERM");
     consoleProcess?.kill("SIGTERM");
     if (indexerHandle) await stopIndexer();
+    if (paymentNodeHandle) await stopSoloNode(paymentNodeHandle);
     if (soloNodeHandle) await stopSoloNode(soloNodeHandle);
   }
 }
@@ -432,6 +452,12 @@ async function startCoordinator(): Promise<ChildProcessWithoutNullStreams> {
     await waitForHealth(COORDINATOR_URL);
     return fakeChild();
   }
+  await assertPortAvailable({
+    port: COORDINATOR_PORT,
+    serviceName: "Local coordinator",
+    portEnv: "VIBLY_E2E_COORDINATOR_PORT",
+    externalModeEnv: "VIBLY_E2E_EXTERNAL_COORDINATOR",
+  });
   const dbPath = path.join(DATA_DIR, "vibly-e2e-coordinator.sqlite");
   // Remove SQLite main file and WAL journal files to ensure a clean state
   await rm(dbPath, { force: true });
@@ -462,6 +488,10 @@ async function startCoordinator(): Promise<ChildProcessWithoutNullStreams> {
       LOG_LEVEL: "warn",
       GOVERNANCE_BACKENDS: "none",
       ASSIGNMENT_EXPIRY_INTERVAL_MS: process.env.ASSIGNMENT_EXPIRY_INTERVAL_MS ?? "250",
+      VIBLY_DOT_RECEIVING_ADDRESS: process.env.VIBLY_DOT_RECEIVING_ADDRESS ?? "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+      GET_VIB_RELAY_RPC_URL: process.env.GET_VIB_RELAY_RPC_URL ?? requireLocalProfile().paymentRpcUrls[0] ?? "",
+      GET_VIB_RELAY_CHAIN_ID: process.env.GET_VIB_RELAY_CHAIN_ID ?? "polkadot-local",
+      GET_VIB_DEPOSIT_SCAN_INTERVAL_MS: process.env.GET_VIB_DEPOSIT_SCAN_INTERVAL_MS ?? "1500",
       ...stakeEnv,
     },
     stdio: "pipe",
@@ -484,18 +514,30 @@ async function startConsole(): Promise<ChildProcessWithoutNullStreams> {
       NEXTAUTH_URL: consoleOrigin,
       AUTH_SECRET: "vibly-e2e-local-secret",
       AUTH_DEV_CREDENTIALS: "true",
+      NEXT_PUBLIC_VIBLY_NETWORK_ID: requireLocalProfile().id,
+      NEXT_PUBLIC_VIBLY_NETWORK_NAME: requireLocalProfile().label,
+      NEXT_PUBLIC_VIBLY_RPC_URL: requireLocalProfile().viblyRpcUrls[0] ?? "",
+      NEXT_PUBLIC_PAYMENT_RPC_URL: requireLocalProfile().paymentRpcUrls[0] ?? "",
+      NEXT_PUBLIC_POLKADOT_RPC_URL: requireLocalProfile().paymentRpcUrls[0] ?? "",
+      NEXT_PUBLIC_VIBLY_NETWORK_PROFILES: publicConsoleNetworkProfiles(requireLocalProfile()),
+      VIBLY_COORDINATOR_NETWORK_PROFILES: serverCoordinatorNetworkProfiles(requireLocalProfile()),
       PORT: String(CONSOLE_PORT),
     },
     stdio: "pipe",
   });
   pipeChild("console", child);
   children.push(child);
-  await waitForHttp(`${consoleOrigin}/login`, 60_000);
+  await waitForHttp(`${consoleOrigin}/`, 60_000);
   return child;
 }
 
+function requireLocalProfile(): E2eNetworkProfile {
+  if (!localProfile) throw new Error("Local E2E network profile was not initialized.");
+  return localProfile;
+}
+
 async function startAgentDaemons(agents: AgentConfig[], projectId: string): Promise<ChildProcessWithoutNullStreams[]> {
-  const started: ChildProcessWithoutNullStreams[] = [];
+  const started: Array<{ agentId: string; child: ChildProcessWithoutNullStreams }> = [];
   for (const agent of agents) {
     const home = path.join(DATA_DIR, "clients", agent.id);
     await mkdir(home, { recursive: true });
@@ -530,14 +572,25 @@ async function startAgentDaemons(agents: AgentConfig[], projectId: string): Prom
     });
     pipeChild(`agent:${agent.id}`, child);
     children.push(child);
-    started.push(child);
+    started.push({ agentId: agent.id, child });
   }
   await sleep(1000);
-  return started;
+  const failed = started
+    .filter(({ child }) => child.exitCode !== null)
+    .map(({ agentId, child }) => `${agentId} (exit=${String(child.exitCode)})`);
+  if (failed.length > 0) {
+    throw new Error(
+      [
+        `Agent daemons exited before the deterministic scenario could begin: ${failed.join(", ")}.`,
+        "Install vibly-client dependencies first: cd ../vibly-client && pnpm install",
+      ].join(" "),
+    );
+  }
+  return started.map(({ child }) => child);
 }
 
 async function smokeConsole(projectId: string): Promise<void> {
-  const response = await fetch(`http://127.0.0.1:${CONSOLE_PORT}/login`);
+  const response = await fetch(`http://127.0.0.1:${CONSOLE_PORT}/`);
   if (!response.ok) throw new Error(`Console smoke failed: HTTP ${response.status}`);
   console.log(`[e2e] console smoke passed for project ${projectId}`);
 }

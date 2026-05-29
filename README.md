@@ -79,12 +79,13 @@ Starts multiple real `vibly-client daemon start` processes with `daemon.llmE2E=t
 
 ## Real-chain pipeline
 
-When `VIBLY_E2E_MOCK_STAKE` is unset (the default), the runner:
+E2E commands boot or verify the whole network profile: Coordinator, Console, Vibly chain, and a separate payment chain. Local runs fail fast if `vibly-solo-node` cannot be started; use `VIBLY_E2E_BUILD_CHAIN=true` to build it automatically.
 
-1. Starts `vibly-solo-node` (or connects to an external node via `VIBLY_E2E_EXTERNAL_CHAIN=true`).
-2. Starts the `vibly-indexer` docker-compose stack (or connects via `VIBLY_E2E_EXTERNAL_INDEXER=true`).
-3. For each agent: registers an on-chain identity, registers the agent, bonds stake, and waits for the indexer and coordinator to reflect an `active` stake ledger.
-4. Runs coordinator with `SUBSTRATE_INDEXER_URL`, `AGENT_STAKE_SYNC_INTERVAL_MS=500`, and `SUBSTRATE_STAKE_TX_MODE=fixture`.
+When `VIBLY_E2E_MOCK_STAKE` is unset, the runner also enables the real stake path:
+
+1. Starts the `vibly-indexer` docker-compose stack (or connects via `VIBLY_E2E_EXTERNAL_INDEXER=true`).
+2. For each agent: registers an on-chain identity, registers the agent, bonds stake, and waits for the indexer and coordinator to reflect an `active` stake ledger.
+3. Runs coordinator with `SUBSTRATE_INDEXER_URL`, `AGENT_STAKE_SYNC_INTERVAL_MS=500`, and `SUBSTRATE_STAKE_TX_MODE=fixture`.
 
 ## Environment variables
 
@@ -92,15 +93,19 @@ When `VIBLY_E2E_MOCK_STAKE` is unset (the default), the runner:
 
 | Variable | Default | Description |
 |---|---|---|
-| `VIBLY_E2E_MOCK_STAKE` | `false` | Set `true` to use mock stake and skip chain/indexer boot |
+| `VIBLY_E2E_MOCK_STAKE` | `false` | Set `true` to force mock stake and skip chain/indexer boot |
+| `VIBLY_E2E_USE_REAL_STAKE` | `false` | Set `true` to require the real chain path instead of auto-falling back to mock stake |
 | `VIBLY_E2E_EXTERNAL_CHAIN` | `false` | Set `true` to connect to an already-running chain (skips spawn) |
 | `VIBLY_E2E_EXTERNAL_INDEXER` | `false` | Set `true` to connect to an already-running indexer |
 | `VIBLY_E2E_BUILD_CHAIN` | `false` | Set `true` to auto-run `cargo build -p vibly-solo-node` |
 | `VIBLY_E2E_CHAIN_RPC_PORT` | `9944` | Chain RPC port |
+| `VIBLY_E2E_PAYMENT_CHAIN_RPC_PORT` | `9945` | Payment-chain RPC port used by Get VIB balance reads/transfers |
 | `VIBLY_E2E_INDEXER_URL` | *(from docker-compose)* | Override indexer GraphQL URL when using external indexer |
 | `VIBLY_SOLO_NODE_BIN` | *(auto-detected)* | Override path to the `vibly-solo-node` binary |
 | `VIBLY_E2E_CHAIN_ID` | `substrate:vibly-solo` | Logical chain identifier |
 | `VIBLY_E2E_ROOT_SIGNER_URI` | `//Alice` | Dev key URI for chain transactions |
+| `VIBLY_E2E_PASEO_RPC_URLS` | built in | Comma-separated Paseo payment RPC fallback list |
+| `VIBLY_E2E_POLKADOT_RPC_URLS` | built in | Comma-separated Polkadot payment RPC fallback list |
 
 ### Coordinator
 
@@ -146,7 +151,10 @@ When `VIBLY_E2E_MOCK_STAKE` is unset (the default), the runner:
 Live LLM examples:
 
 ```bash
-# Local live run. Use mock stake for the fastest smoke path.
+# Local live run. Requires a local solo-node binary, or set VIBLY_E2E_BUILD_CHAIN=true.
+VIBLY_E2E_RUN_NAME=local-live pnpm e2e:live-llm
+
+# Local live run. Mock stake still boots Vibly/payment chains, but skips indexer stake sync.
 VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live pnpm e2e:live-llm
 
 # Local live run with Get VIB local relay wiring enabled (for Console Get VIB page smoke).
@@ -203,6 +211,6 @@ knowledge/         Seed knowledge entries (literature index, Goldbach background
 | `pnpm e2e:stake` | Stake scenarios A-D only |
 | `pnpm e2e:stake:unbond` | Stake scenarios with `VIBLY_E2E_UNBOND=true` |
 | `pnpm e2e:stake:stale-indexer` | Stake scenarios with stale indexer simulation |
-| `pnpm e2e:console` | Playwright console smoke tests |
+| `pnpm e2e:console` | Starts the local network profile and runs Playwright console smoke tests |
 | `pnpm test` | Vitest unit tests |
 | `pnpm typecheck` | TypeScript type check |

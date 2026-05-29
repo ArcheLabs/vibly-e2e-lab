@@ -26,6 +26,7 @@ const INDEXER_DIR = path.resolve(ROOT, "../vibly-indexer");
 const COORDINATOR_PORT = Number(process.env.VIBLY_E2E_COORDINATOR_PORT ?? "8787");
 const CONSOLE_PORT = Number(process.env.VIBLY_E2E_CONSOLE_PORT ?? "3001");
 const CHAIN_RPC_PORT = Number(process.env.VIBLY_E2E_CHAIN_RPC_PORT ?? "9944");
+const PAYMENT_CHAIN_RPC_PORT = Number(process.env.VIBLY_E2E_PAYMENT_CHAIN_RPC_PORT ?? "9945");
 const WIPE_VOLUMES = process.argv.includes("--volumes");
 
 /** Kill all processes listening on the given TCP port (SIGTERM). */
@@ -69,6 +70,7 @@ function main(): void {
   killPort(COORDINATOR_PORT, "coordinator");
   killPort(CONSOLE_PORT, "console");
   killPort(CHAIN_RPC_PORT, "chain node");
+  killPort(PAYMENT_CHAIN_RPC_PORT, "payment chain node");
   // Belt-and-braces: also kill by process name in case the node uses a different port.
   killByPattern("vibly-solo-node", "chain node (process name)");
   // Agent daemons are started with "daemon start --interval <N>"

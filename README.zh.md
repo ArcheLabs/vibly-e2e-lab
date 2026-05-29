@@ -47,10 +47,12 @@ OPENAI_MODEL=deepseek-chat
 
 任何 OpenAI 兼容的端点均可使用（OpenAI、Anthropic 代理、本地 Ollama 等）。未设置 `OPENAI_API_KEY` 时，半自主模式会被静默跳过。
 
+所有本地 E2E 命令都会启动完整网络 profile：Coordinator、Console、Vibly 链和独立支付链。默认端口为 Vibly 链 `9944`、支付链 `9945`；如果本地无法启动 `vibly-solo-node` 会直接报错，可用 `VIBLY_E2E_BUILD_CHAIN=true` 自动构建。
+
 Live LLM 模式要求设置 `OPENAI_API_KEY`。常用命令：
 
 ```bash
-# 本地快速 smoke，使用 mock stake
+# 本地 smoke；mock stake 只跳过 indexer stake sync，仍会启动 Vibly/支付链
 VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live pnpm e2e:live-llm
 
 # 如果同名 run 已有旧数据，重置后重新开始
@@ -73,6 +75,7 @@ VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live pnpm e2e:live-llm:get-vi
 `VIBLY_E2E_PAUSE_AT` 可取：`after-seed`、`after-first-observation`、`after-proposal`、`after-artifacts`、`after-knowledge-sync`、`before-second-observation`。
 `VIBLY_E2E_COORDINATOR_START_TIMEOUT_MS` 可用于放宽本地 coordinator 启动等待时间（默认 120000ms）。
 `VIBLY_E2E_ENABLE_GET_VIB_LOCAL=true` 时，会为 coordinator 注入本地 Get VIB relay 相关配置；可用 `VIBLY_E2E_GET_VIB_RELAY_RPC` 与 `VIBLY_E2E_GET_VIB_DEPOSIT_ADDRESS` 覆盖默认值。
+测试网支付链内置 Paseo RPC 兜底地址，激励测试网支付链内置 Polkadot 主网 RPC 兜底地址；可分别用 `VIBLY_E2E_PASEO_RPC_URLS` 与 `VIBLY_E2E_POLKADOT_RPC_URLS` 追加覆盖。
 测试网默认使用已存在 / 预先质押的 agent 身份；如需显式提供链上绑定，可设置 `VIBLY_E2E_AGENT_CHAIN_MAP` JSON。
 `pnpm e2e:live-llm`、`pnpm e2e:live-llm:resume` 和 `pnpm e2e:live-llm:testnet` 默认会在成功后保留 Coordinator、Console 和 agent daemon 进程，并打印 Console URL。agent daemon 会继续运行并监听新的任务/义务；查看结束后按 Ctrl+C，会执行清理。需要自动退出时使用 `pnpm e2e:live-llm:ci`。
 
@@ -102,3 +105,4 @@ knowledge/         — 初始知识条目（文献索引、哥德巴赫背景、
 | `pnpm e2e:get-vib:polkadot-local` | 面向本地 Polkadot relay + 本地链联调的 Get VIB 流程：发送 relay DOT、等待观察入账并 finalize，然后执行链上 claim 验证 |
 | `pnpm e2e:live-llm:get-vib-local` | Live LLM 运行时启用本地 Get VIB relay 配置，便于 Console 的 Get VIB 页面联调 |
 | `pnpm e2e:live-llm:resume:get-vib-local` | 与上条相同，但用于 resume 模式 |
+| `pnpm e2e:console` | 启动本地网络 profile 后运行 Console Playwright 冒烟测试 |

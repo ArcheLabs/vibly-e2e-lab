@@ -20,7 +20,7 @@
     "e2e:stake": "tsx --env-file=.env src/stakeScenarios.ts",
     "e2e:stake:unbond": "VIBLY_E2E_UNBOND=true tsx --env-file=.env src/stakeScenarios.ts",
     "e2e:stake:stale-indexer": "VIBLY_E2E_STALE_INDEXER=true tsx --env-file=.env src/stakeScenarios.ts",
-    "e2e:console": "playwright test",
+    "e2e:console": "tsx --env-file=.env src/console.ts",
     "test": "vitest run --exclude \"tests/**\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

@@ -10,11 +10,19 @@ import {
   stopSoloNode,
   type SoloNodeHandle,
 } from "./lifecycle/soloNode.js";
+import { resolveUseRealStake } from "./lifecycle/stakeMode.js";
 import {
   startIndexer,
   stopIndexer,
   type IndexerHandle,
 } from "./lifecycle/indexer.js";
+import { assertPortAvailable } from "./lifecycle/ports.js";
+import {
+  localNetworkProfile,
+  publicConsoleNetworkProfiles,
+  serverCoordinatorNetworkProfiles,
+  type E2eNetworkProfile,
+} from "./lifecycle/networkProfiles.js";
 import { seedChainAgent, waitForCoordinatorStakeSync, type ChainSeedReceipt } from "./chainSeed.js";
 import {
   createInitialLiveRunState,
@@ -35,11 +43,12 @@ const REPORT_DIR = path.join(ROOT, "reports");
 const DATA_DIR = path.join(ROOT, "data");
 const COORDINATOR_PORT = Number(process.env.VIBLY_E2E_COORDINATOR_PORT ?? "8787");
 const CONSOLE_PORT = Number(process.env.VIBLY_E2E_CONSOLE_PORT ?? "3001");
+const PAYMENT_CHAIN_RPC_PORT = Number(process.env.VIBLY_E2E_PAYMENT_CHAIN_RPC_PORT ?? "9945");
 const COORDINATOR_URL = process.env.COORDINATOR_URL ?? `http://127.0.0.1:${COORDINATOR_PORT}`;
 const COORDINATOR_START_TIMEOUT_MS = Number(process.env.VIBLY_E2E_COORDINATOR_START_TIMEOUT_MS ?? "120000");
 const API_TOKEN = process.env.COORDINATOR_API_TOKEN ?? "dev-token";
 const CHAIN_ID = process.env.VIBLY_E2E_CHAIN_ID ?? "substrate:vibly-solo";
-const USE_REAL_STAKE = process.env.VIBLY_E2E_MOCK_STAKE !== "true";
+const USE_REAL_STAKE = resolveUseRealStake("e2e:live-llm");
 const ENABLE_GET_VIB_LOCAL = process.env.VIBLY_E2E_ENABLE_GET_VIB_LOCAL === "true";
 const DEFAULT_GET_VIB_DEPOSIT_ADDRESS = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
 const EXTERNAL_COORDINATOR = process.env.VIBLY_E2E_EXTERNAL_COORDINATOR === "true";
@@ -73,7 +82,9 @@ type ChainBinding = {
 
 const children: ChildProcessWithoutNullStreams[] = [];
 let soloNodeHandle: SoloNodeHandle | undefined;
+let paymentNodeHandle: SoloNodeHandle | undefined;
 let indexerHandle: IndexerHandle | undefined;
+let localProfile: E2eNetworkProfile | undefined;
 
 class PauseExit extends Error {
   constructor(readonly boundary: PauseBoundary) {
@@ -119,9 +130,23 @@ async function main(): Promise<void> {
   state = { ...state, status: "running", mode };
   await saveLiveRunState(DATA_DIR, state);
 
-  const manageLocalStakePipeline = USE_REAL_STAKE && !EXTERNAL_COORDINATOR;
+  const manageLocalNetwork = !EXTERNAL_COORDINATOR;
+  const manageLocalStakePipeline = USE_REAL_STAKE && manageLocalNetwork;
+  if (manageLocalNetwork) {
+    soloNodeHandle = await startSoloNode({ rpcExternal: true, serviceName: "Vibly chain" });
+    paymentNodeHandle = await startSoloNode({
+      rpcPort: PAYMENT_CHAIN_RPC_PORT,
+      rpcExternal: true,
+      serviceName: "payment chain",
+    });
+    localProfile = localNetworkProfile({
+      coordinatorUrl: COORDINATOR_URL,
+      viblyRpcUrl: soloNodeHandle.wsUrl,
+      paymentRpcUrl: paymentNodeHandle.wsUrl,
+    });
+  }
   if (manageLocalStakePipeline) {
-    soloNodeHandle = await startSoloNode({ rpcExternal: true });
+    if (!soloNodeHandle) throw new Error("Vibly chain was not initialized for live LLM stake pipeline.");
     indexerHandle = await startIndexer(soloNodeHandle.rpcPort);
   }
 
@@ -132,10 +157,7 @@ async function main(): Promise<void> {
   let contentReportPath: string | undefined;
   try {
     if (process.env.VIBLY_E2E_SKIP_CONSOLE !== "true") {
-      consoleProcess = await startConsole().catch((err) => {
-        console.warn(`[e2e:live] console unavailable, API flow will continue: ${String(err)}`);
-        return undefined;
-      });
+      consoleProcess = await startConsole();
     }
 
     if (state.pausedAt) {
@@ -228,6 +250,7 @@ async function main(): Promise<void> {
     coordinator.kill("SIGTERM");
     consoleProcess?.kill("SIGTERM");
     if (indexerHandle) await stopIndexer();
+    if (paymentNodeHandle) await stopSoloNode(paymentNodeHandle);
     if (soloNodeHandle) await stopSoloNode(soloNodeHandle);
   }
 }
@@ -475,6 +498,7 @@ function hasBlockingObligation(inbox: Json, principalId: string): boolean {
 
 async function startAgentDaemons(agents: AgentConfig[], projectId: string): Promise<void> {
   const runName = sanitizeRunName(process.env.VIBLY_E2E_RUN_NAME ?? "live-vibing-math");
+  const started: Array<{ agentId: string; child: ChildProcessWithoutNullStreams }> = [];
   for (const agent of agents) {
     const home = path.join(DATA_DIR, "live-runs", runName, "clients", agent.id);
     await mkdir(home, { recursive: true });
@@ -512,8 +536,20 @@ async function startAgentDaemons(agents: AgentConfig[], projectId: string): Prom
     });
     pipeChild(`live-agent:${agent.id}`, child);
     children.push(child);
+    started.push({ agentId: agent.id, child });
   }
   await sleep(1000);
+  const failed = started
+    .filter(({ child }) => child.exitCode !== null)
+    .map(({ agentId, child }) => `${agentId} (exit=${String(child.exitCode)})`);
+  if (failed.length > 0) {
+    throw new Error(
+      [
+        `Live agent daemons exited before the run could continue: ${failed.join(", ")}.`,
+        "Install vibly-client dependencies first: cd ../vibly-client && pnpm install",
+      ].join(" "),
+    );
+  }
 }
 
 async function startCoordinator(runRoot: string, preserveDb: boolean): Promise<ChildProcessWithoutNullStreams> {
@@ -521,6 +557,12 @@ async function startCoordinator(runRoot: string, preserveDb: boolean): Promise<C
     await waitForHealth(COORDINATOR_URL, COORDINATOR_START_TIMEOUT_MS);
     return fakeChild();
   }
+  await assertPortAvailable({
+    port: COORDINATOR_PORT,
+    serviceName: "Live LLM coordinator",
+    portEnv: "VIBLY_E2E_COORDINATOR_PORT",
+    externalModeEnv: "VIBLY_E2E_EXTERNAL_COORDINATOR",
+  });
   const dbPath = path.join(runRoot, "coordinator.sqlite");
   if (!preserveDb) {
     await rm(dbPath, { force: true });
@@ -540,7 +582,7 @@ async function startCoordinator(runRoot: string, preserveDb: boolean): Promise<C
   const getVibLocalEnv: Record<string, string> = ENABLE_GET_VIB_LOCAL
     ? {
         VIBLY_DOT_RECEIVING_ADDRESS: process.env.VIBLY_DOT_RECEIVING_ADDRESS ?? process.env.VIBLY_E2E_GET_VIB_DEPOSIT_ADDRESS ?? DEFAULT_GET_VIB_DEPOSIT_ADDRESS,
-        GET_VIB_RELAY_RPC_URL: process.env.GET_VIB_RELAY_RPC_URL ?? process.env.VIBLY_E2E_GET_VIB_RELAY_RPC ?? `ws://127.0.0.1:${soloNodeHandle?.rpcPort ?? Number(process.env.VIBLY_E2E_CHAIN_RPC_PORT ?? "9944")}`,
+        GET_VIB_RELAY_RPC_URL: process.env.GET_VIB_RELAY_RPC_URL ?? process.env.VIBLY_E2E_GET_VIB_RELAY_RPC ?? localProfile?.paymentRpcUrls[0] ?? "",
         GET_VIB_RELAY_CHAIN_ID: process.env.GET_VIB_RELAY_CHAIN_ID ?? process.env.VIBLY_E2E_GET_VIB_RELAY_CHAIN_ID ?? "polkadot-local",
         GET_VIB_DEPOSIT_SCAN_INTERVAL_MS: process.env.GET_VIB_DEPOSIT_SCAN_INTERVAL_MS ?? process.env.VIBLY_E2E_GET_VIB_SCAN_INTERVAL_MS ?? "1500",
         GET_VIB_DEPOSIT_FINALITY_BLOCKS: process.env.GET_VIB_DEPOSIT_FINALITY_BLOCKS ?? process.env.VIBLY_E2E_GET_VIB_FINALITY_BLOCKS ?? "1",
@@ -585,14 +627,37 @@ async function startConsole(): Promise<ChildProcessWithoutNullStreams> {
       NEXTAUTH_URL: consoleOrigin,
       AUTH_SECRET: "vibly-e2e-live-secret",
       AUTH_DEV_CREDENTIALS: "true",
+      NEXT_PUBLIC_VIBLY_NETWORK_PROFILES: publicConsoleNetworkProfiles(resolveConsoleLocalProfile()),
+      VIBLY_COORDINATOR_NETWORK_PROFILES: serverCoordinatorNetworkProfiles(resolveConsoleLocalProfile()),
+      NEXT_PUBLIC_VIBLY_NETWORK_ID: defaultConsoleNetworkId(),
+      NEXT_PUBLIC_VIBLY_NETWORK_NAME: defaultConsoleNetworkName(),
+      NEXT_PUBLIC_VIBLY_RPC_URL: resolveConsoleLocalProfile().viblyRpcUrls[0] ?? "",
+      NEXT_PUBLIC_PAYMENT_RPC_URL: resolveConsoleLocalProfile().paymentRpcUrls[0] ?? "",
+      NEXT_PUBLIC_POLKADOT_RPC_URL: resolveConsoleLocalProfile().paymentRpcUrls[0] ?? "",
       PORT: String(CONSOLE_PORT),
     },
     stdio: "pipe",
   });
   pipeChild("console", child);
   children.push(child);
-  await waitForHttp(`${consoleOrigin}/login`, 60_000);
+  await waitForHttp(`${consoleOrigin}/`, 60_000);
   return child;
+}
+
+function defaultConsoleNetworkId(): string {
+  return EXTERNAL_COORDINATOR ? "substrate:vibly-testnet" : resolveConsoleLocalProfile().id;
+}
+
+function defaultConsoleNetworkName(): string {
+  return EXTERNAL_COORDINATOR ? "Testnet" : resolveConsoleLocalProfile().label;
+}
+
+function resolveConsoleLocalProfile(): E2eNetworkProfile {
+  return localProfile ?? localNetworkProfile({
+    coordinatorUrl: COORDINATOR_URL,
+    viblyRpcUrl: process.env.VIBLY_E2E_CHAIN_RPC_URL ?? process.env.SUBSTRATE_RPC_URL ?? "",
+    paymentRpcUrl: process.env.VIBLY_E2E_GET_VIB_RELAY_RPC ?? process.env.GET_VIB_RELAY_RPC_URL ?? "",
+  });
 }
 
 async function waitForObservation(observationTaskId: string): Promise<Json> {
