@@ -234,8 +234,9 @@ export async function startSoloNode(opts: SoloNodeOptions = {}): Promise<SoloNod
       process.stderr.write(`[chain] ${String(chunk)}`);
   });
 
+  const chainStartTimeoutMs = Number(process.env["VIBLY_E2E_CHAIN_START_TIMEOUT_MS"] ?? 60_000);
   try {
-    await waitForChainReady(wsUrl, 60_000);
+    await waitForChainReady(wsUrl, chainStartTimeoutMs);
     console.log(`[e2e] ${serviceName} ready at ${wsUrl}`);
   } catch (err) {
     child.kill("SIGKILL");
