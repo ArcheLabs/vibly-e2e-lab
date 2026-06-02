@@ -146,6 +146,7 @@ When `VIBLY_E2E_MOCK_STAKE` is unset, the runner also enables the real stake pat
 | `VIBLY_E2E_GET_VIB_RELAY_RPC` | local chain ws URL | Override relay RPC for local Get VIB wiring |
 | `VIBLY_E2E_GET_VIB_DEPOSIT_ADDRESS` | Alice dev address | Override local Get VIB deposit address |
 | `VIBLY_E2E_SKIP_CONSOLE` | `false` | Skip starting Console during live LLM runs |
+| `VIBLY_E2E_CONSOLE_START_TIMEOUT_MS` | `240000` | Console dev server startup timeout; e2e starts Console with polling watchers by default |
 | `VIBLY_E2E_KEEP_ALIVE_ON_SUCCESS` | script-dependent | Keep services running after success; enabled by `pnpm e2e:live-llm` |
 
 Live LLM examples:

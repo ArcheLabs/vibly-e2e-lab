@@ -17,11 +17,13 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
+import { rmSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const INDEXER_DIR = path.resolve(ROOT, "../vibly-indexer");
+const CONSOLE_DIR = path.resolve(ROOT, "../vibly-console");
 
 const COORDINATOR_PORT = Number(process.env.VIBLY_E2E_COORDINATOR_PORT ?? "8787");
 const CONSOLE_PORT = Number(process.env.VIBLY_E2E_CONSOLE_PORT ?? "3001");
@@ -66,9 +68,20 @@ function stopDocker(): void {
   }
 }
 
+function cleanConsoleDevCache(): void {
+  try {
+    rmSync(path.join(CONSOLE_DIR, ".next", "dev"), { recursive: true, force: true });
+    console.log("[e2e:stop] Cleared Console dev cache");
+  } catch {
+    console.log("[e2e:stop] Console dev cache — already clean or unavailable");
+  }
+}
+
 function main(): void {
   killPort(COORDINATOR_PORT, "coordinator");
   killPort(CONSOLE_PORT, "console");
+  killByPattern("vibly-console.*next dev", "console (process name)");
+  cleanConsoleDevCache();
   killPort(CHAIN_RPC_PORT, "chain node");
   killPort(PAYMENT_CHAIN_RPC_PORT, "payment chain node");
   // Belt-and-braces: also kill by process name in case the node uses a different port.

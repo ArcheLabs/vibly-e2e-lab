@@ -25,6 +25,12 @@ import {
   serverCoordinatorNetworkProfiles,
   type E2eNetworkProfile,
 } from "./lifecycle/networkProfiles.js";
+import {
+  consoleStartTimeoutMs,
+  resetConsoleDevCache,
+  waitForHttpWithChild,
+  withConsoleDevEnv,
+} from "./lifecycle/consoleDev.js";
 import { seedChainAgent, waitForCoordinatorStakeSync, type ChainSeedReceipt } from "./chainSeed.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
@@ -504,8 +510,9 @@ async function startCoordinator(): Promise<ChildProcessWithoutNullStreams> {
 
 async function startConsole(): Promise<ChildProcessWithoutNullStreams> {
   const consoleOrigin = `http://localhost:${CONSOLE_PORT}`;
+  await resetConsoleDevCache(ROOT);
   const child = spawn("pnpm", ["--dir", path.resolve(ROOT, "../vibly-console"), "exec", "next", "dev", "--webpack", "-p", String(CONSOLE_PORT)], {
-    env: {
+    env: withConsoleDevEnv({
       ...process.env,
       COORDINATOR_URL,
       NEXT_PUBLIC_COORDINATOR_URL: COORDINATOR_URL,
@@ -522,12 +529,12 @@ async function startConsole(): Promise<ChildProcessWithoutNullStreams> {
       NEXT_PUBLIC_VIBLY_NETWORK_PROFILES: publicConsoleNetworkProfiles(requireLocalProfile()),
       VIBLY_COORDINATOR_NETWORK_PROFILES: serverCoordinatorNetworkProfiles(requireLocalProfile()),
       PORT: String(CONSOLE_PORT),
-    },
+    }),
     stdio: "pipe",
   });
   pipeChild("console", child);
   children.push(child);
-  await waitForHttp(`${consoleOrigin}/`, 60_000);
+  await waitForHttpWithChild(`${consoleOrigin}/personal-center`, consoleStartTimeoutMs(), child);
   return child;
 }
 
