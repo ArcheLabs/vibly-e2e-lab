@@ -157,6 +157,11 @@ async function main(): Promise<void> {
   }
 
   const coordinator = await startCoordinator(runRoot, Boolean(state.organizationId));
+  if (manageLocalNetwork && soloNodeHandle) {
+    await rehydrateLocalGetVibClaimState(soloNodeHandle.wsUrl).catch((err) => {
+      console.warn(`[e2e:live] Get VIB claim chain rehydrate skipped: ${String(err)}`);
+    });
+  }
   let consoleProcess: ChildProcessWithoutNullStreams | undefined;
   let completed = false;
   let reportPath: string | undefined;
@@ -1016,6 +1021,145 @@ function getFirstNetworkAddress(): string | undefined {
     }
   }
   return undefined;
+}
+
+async function rehydrateLocalGetVibClaimState(rpcUrl: string): Promise<void> {
+  const statusBody = await get<Json>("/admin/get-vib/root-uploader/status");
+  const status = (unwrapData<Json>(statusBody).status ?? {}) as Json;
+  const manifest = status.latestManifest as Json | undefined;
+  if (!manifest?.networkId || !manifest.rootVersion || !manifest.merkleRoot) return;
+
+  const coordinatorEnv = await readCoordinatorEnv();
+  const publisherUri = coordinatorEnv.GET_VIB_ROOT_PUBLISHER_URI ?? process.env.GET_VIB_ROOT_PUBLISHER_URI;
+  if (!publisherUri) return;
+
+  const [{ ApiPromise, WsProvider }, { Keyring }, { cryptoWaitReady, encodeAddress }] = await Promise.all([
+    import("@polkadot/api"),
+    import("@polkadot/keyring"),
+    import("@polkadot/util-crypto"),
+  ]);
+  await cryptoWaitReady();
+  const api = await ApiPromise.create({ provider: new WsProvider(rpcUrl) });
+  try {
+    const keyring = new Keyring({ type: "sr25519" });
+    const sudo = keyring.addFromUri("//Alice");
+    const publisher = keyring.addFromUri(publisherUri);
+    const reserve = encodeAddress(new Uint8Array(32).fill(7), 42);
+    const rootVersion = Number(manifest.rootVersion);
+    const merkleRoot = String(manifest.merkleRoot);
+    const totalCumulativeBaseUnits = decimalToBaseUnits(String(manifest.totalCumulativeAmount ?? "0"), 12);
+    const currentRoot = await api.query.vibClaim.claimRoot() as unknown as { isSome?: boolean; unwrap?: () => Json };
+    const current = currentRoot.isSome && typeof currentRoot.unwrap === "function" ? currentRoot.unwrap() : undefined;
+    const currentRootVersion = Number((current?.rootVersion as { toString?: () => string } | undefined)?.toString?.() ?? 0);
+    const currentMerkleRoot = (current?.merkleRoot as { toHex?: () => string } | undefined)?.toHex?.();
+    const needsRoot = currentRootVersion !== rootVersion || currentMerkleRoot !== merkleRoot;
+    if (!needsRoot) return;
+
+    const configuredPublisher = await api.query.vibClaim.claimRootPublisher() as unknown as { toString(): string };
+    if (configuredPublisher.toString() !== publisher.address) {
+      await signAndWaitLocal(
+        api.tx.sudo.sudo(api.tx.vibClaim.setClaimRootPublisher(publisher.address)),
+        sudo,
+        "vibClaim.setClaimRootPublisher",
+      );
+    }
+
+    const publisherAccount = await api.query.system.account(publisher.address) as unknown as { data: { free: { toString(): string } } };
+    if (BigInt(publisherAccount.data.free.toString()) < 1_000_000_000_000n) {
+      await signAndWaitLocal(
+        api.tx.balances.transferAllowDeath
+          ? api.tx.balances.transferAllowDeath(publisher.address, 10_000_000_000_000n)
+          : api.tx.balances.transfer(publisher.address, 10_000_000_000_000n),
+        sudo,
+        "balances.transferAllowDeath",
+      );
+    }
+
+    if (!api.tx.balances.forceSetBalance) throw new Error("balances.forceSetBalance is unavailable");
+    const reserveTarget = BigInt(totalCumulativeBaseUnits) + 10_000_000n * 10n ** 12n;
+    const reserveAccount = await api.query.system.account(reserve) as unknown as { data: { free: { toString(): string } } };
+    if (BigInt(reserveAccount.data.free.toString()) < reserveTarget) {
+      await signAndWaitLocal(
+        api.tx.sudo.sudo(api.tx.balances.forceSetBalance(reserve, reserveTarget)),
+        sudo,
+        "balances.forceSetBalance",
+      );
+    }
+
+    await signAndWaitLocal(
+      api.tx.vibClaim.setClaimRoot(
+        String(manifest.networkId),
+        rootVersion,
+        merkleRoot,
+        totalCumulativeBaseUnits,
+        String(manifest.metadataHash),
+      ),
+      publisher,
+      "vibClaim.setClaimRoot",
+    );
+    console.log(`[e2e:live] Rehydrated Get VIB claim root v${rootVersion} on local chain.`);
+  } finally {
+    await api.disconnect();
+  }
+}
+
+async function readCoordinatorEnv(): Promise<Record<string, string>> {
+  const envPath = path.resolve(ROOT, "../vibly-coordinator/.env");
+  if (!existsSync(envPath)) return {};
+  const text = await readFile(envPath, "utf8");
+  const env: Record<string, string> = {};
+  for (const rawLine of text.split(/\n/u)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const index = line.indexOf("=");
+    if (index < 0) continue;
+    env[line.slice(0, index)] = parseEnvValue(line.slice(index + 1));
+  }
+  return env;
+}
+
+function parseEnvValue(value: string): string {
+  const trimmed = value.trim();
+  if ((trimmed.startsWith("'") && trimmed.endsWith("'")) || (trimmed.startsWith("\"") && trimmed.endsWith("\""))) return trimmed.slice(1, -1);
+  return trimmed;
+}
+
+async function signAndWaitLocal(
+  tx: unknown,
+  signer: unknown,
+  label: string,
+): Promise<void> {
+  const submittable = tx as {
+    signAndSend: (
+      signer: unknown,
+      callback: (result: {
+        dispatchError?: { toString(): string };
+        events?: Array<{ event: { section: string; method: string; data: unknown[] } }>;
+        status: { isInBlock: boolean; isFinalized: boolean };
+      }) => void,
+    ) => Promise<() => void>;
+  };
+  await new Promise<void>((resolve, reject) => {
+    void submittable.signAndSend(signer, (result) => {
+      if (result.dispatchError) {
+        reject(new Error(`${label}: ${result.dispatchError.toString()}`));
+        return;
+      }
+      const sudoFailed = result.events?.find((item) => item.event.section === "sudo" && item.event.method === "Sudid" && String(item.event.data[0]).startsWith("Err"));
+      if (sudoFailed) {
+        reject(new Error(`${label}: ${String(sudoFailed.event.data[0])}`));
+        return;
+      }
+      if (result.status.isInBlock || result.status.isFinalized) resolve();
+    }).catch(reject);
+  });
+}
+
+function decimalToBaseUnits(value: string, decimals: number): string {
+  const [wholeRaw, fractionRaw = ""] = value.split(".");
+  const whole = wholeRaw || "0";
+  const fraction = `${fractionRaw}${"0".repeat(decimals)}`.slice(0, decimals);
+  return String(BigInt(whole) * 10n ** BigInt(decimals) + BigInt(fraction || "0"));
 }
 
 function sleep(ms: number): Promise<void> {
