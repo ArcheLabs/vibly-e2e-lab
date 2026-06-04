@@ -31,6 +31,14 @@ VIBLY_E2E_MOCK_STAKE=true pnpm e2e:local
 # Skip console smoke test
 pnpm e2e:local:no-console
 
+# Manual Get VIB Console lab. Keeps local chains, Coordinator, and Console running
+# for browser interaction; no Playwright and no agent daemons. The local claim
+# root uploader is enabled by default and uploads every 2 minutes.
+pnpm dev:get-vib-console
+
+# If the lab runs on a remote server and you SSH-forward local 3002 -> remote 3001:
+VIBLY_E2E_PUBLIC_CONSOLE_PORT=3002 pnpm dev:get-vib-console
+
 # Stake-specific scenarios only
 pnpm e2e:stake
 ```
@@ -121,6 +129,9 @@ When `VIBLY_E2E_MOCK_STAKE` is unset, the runner also enables the real stake pat
 |---|---|---|
 | `VIBLY_E2E_SKIP_CONSOLE` | `false` | Skip the console smoke test |
 | `VIBLY_E2E_SKIP_SSE_TIMING` | `false` | Skip the SSE timing probe |
+| `VIBLY_E2E_PUBLIC_CONSOLE_PORT` | `VIBLY_E2E_CONSOLE_PORT` | Browser-facing forwarded port for manual Console labs, e.g. local `3002` forwarding remote `3001` |
+| `VIBLY_E2E_PUBLIC_CONSOLE_URL` | derived from port | Full browser-facing Console URL for SSH/proxy setups; overrides `VIBLY_E2E_PUBLIC_CONSOLE_PORT` |
+| `GET_VIB_ROOT_UPLOAD_INTERVAL_MS` | `120000` in `pnpm dev:get-vib-console` | Local manual Get VIB claim-root upload cadence. Set to `0` to disable automatic uploads. |
 
 ### LLM (semi-autonomous mode)
 
@@ -209,6 +220,7 @@ knowledge/         Seed knowledge entries (literature index, Goldbach background
 | `pnpm e2e:live-llm:testnet` | Attach live LLM run to external/testnet coordinator |
 | `pnpm e2e:get-vib` | Get VIB flow smoke: quote/order/finalize/manifest/summary/proof/records, with optional chain claim when chain RPC is configured |
 | `pnpm e2e:get-vib:polkadot-local` | Local Polkadot relay + local chain Get VIB flow: relay deposit observation/finalize + on-chain claim verification |
+| `pnpm dev:get-vib-console` | Manual Get VIB Console lab: starts local Vibly/payment chains, Coordinator, and Console; keeps them alive for browser testing; does not run Playwright or agents |
 | `pnpm e2e:stake` | Stake scenarios A-D only |
 | `pnpm e2e:stake:unbond` | Stake scenarios with `VIBLY_E2E_UNBOND=true` |
 | `pnpm e2e:stake:stale-indexer` | Stake scenarios with stale indexer simulation |
