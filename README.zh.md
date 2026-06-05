@@ -151,6 +151,7 @@ pnpm deploy:npm
 - `vibly-coordinator` 实际上也不是“纯无服务”。应用进程可以跑在 Cloud Run 上，但生产环境必须使用 `STORAGE_MODE=postgres` 并连接外部 Postgres；Coordinator 启动时会自行跑迁移。
 - 公网 `Lumen` 和 `Monolith` 不需要单独再部署一个本地 payment chain。`Lumen` 直接使用 Paseo RPC 处理 Get VIB 的 relay 侧转账，`Monolith` 直接使用 Polkadot 主网 RPC。本地 E2E / 手动 Get VIB 联调时额外启的 payment chain，只属于实验室环境。
 - `pnpm deploy:npm` 现在默认只处理真正会发布到 npm 的项目：`concord`、`vibly-client`、`vibly-coordinator-http-contract`。如果你要覆盖这个默认集合，再显式传 `--only=...`。
+- 内建 npm profile 现在优先使用 Access Token。设置 `NPM_TOKEN` 或 `NODE_AUTH_TOKEN` 即可；脚本会自动把 `NPM_TOKEN` 映射成 `NODE_AUTH_TOKEN`，不再默认设计 OTP 流程。
 
 ### 初始化一台新的 indexer VM
 

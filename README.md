@@ -178,6 +178,7 @@ For a stricter production run, combine `--phase=full --require-deploy-hook` so e
 - `vibly-coordinator` is also not fully serverless in practice. The app process can run on Cloud Run, but `STORAGE_MODE=postgres` and an external Postgres database are mandatory in production. Coordinator startup runs migrations against that database.
 - Public `Lumen` and `Monolith` environments do not need a separately deployed local payment chain. `Lumen` uses Paseo RPCs for relay-side transfers; `Monolith` uses Polkadot mainnet RPCs. The extra payment chain only exists in local E2E / manual Get VIB labs.
 - `pnpm deploy:npm` now defaults to the actual npm-publishable projects only: `concord`, `vibly-client`, and `vibly-coordinator-http-contract`. Pass `--only=...` if you want to override that default selection.
+- The built-in npm profile is now Access Token-first. Set `NPM_TOKEN` or `NODE_AUTH_TOKEN`; the deploy script maps `NPM_TOKEN` into `NODE_AUTH_TOKEN` automatically and no longer expects an OTP field.
 
 ### Bootstrap a fresh indexer VM
 

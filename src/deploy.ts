@@ -239,6 +239,7 @@ function runShellCommand(command: string, cwd: string, projectId: string, option
     stdio: "inherit",
     env: {
       ...process.env,
+      NODE_AUTH_TOKEN: process.env.NODE_AUTH_TOKEN ?? process.env.NPM_TOKEN,
       VIBLY_DEPLOY_PROJECT: projectId,
       VIBLY_DEPLOY_TARGET: options.target,
       VIBLY_DEPLOY_ROOT: REPO_ROOT,
@@ -561,25 +562,30 @@ function resolveGcpDeployCommand(projectId: string, git?: GitInfo): Omit<DeployC
 function resolveNpmDeployCommand(projectId: string): Omit<DeployCommandResolution, "envVar"> | undefined {
   const access = process.env.NPM_PUBLISH_ACCESS?.trim() || "public";
   const tag = process.env.NPM_PUBLISH_TAG?.trim() || "latest";
-  const otp = process.env.NPM_PUBLISH_OTP?.trim();
-  const otpFlag = otp ? ` --otp ${shellQuote(otp)}` : "";
+  const token = process.env.NODE_AUTH_TOKEN?.trim() || process.env.NPM_TOKEN?.trim();
+  if (!token) {
+    return {
+      source: "npm",
+      missingEnv: ["NODE_AUTH_TOKEN or NPM_TOKEN"],
+    };
+  }
 
   switch (projectId) {
     case "concord":
       return {
-        command: `pnpm -r --filter '@vibly-ai/concord-*' publish --access ${shellQuote(access)} --tag ${shellQuote(tag)} --no-git-checks${otpFlag}`,
+        command: `pnpm -r --filter '@vibly-ai/concord-*' publish --access ${shellQuote(access)} --tag ${shellQuote(tag)} --no-git-checks`,
         source: "npm",
         missingEnv: [],
       };
     case "vibly-client":
       return {
-        command: `pnpm publish --access ${shellQuote(access)} --tag ${shellQuote(tag)} --no-git-checks${otpFlag}`,
+        command: `pnpm publish --access ${shellQuote(access)} --tag ${shellQuote(tag)} --no-git-checks`,
         source: "npm",
         missingEnv: [],
       };
     case "vibly-coordinator-http-contract":
       return {
-        command: `pnpm publish --access ${shellQuote(access)} --tag ${shellQuote(tag)} --no-git-checks${otpFlag}`,
+        command: `pnpm publish --access ${shellQuote(access)} --tag ${shellQuote(tag)} --no-git-checks`,
         source: "npm",
         missingEnv: [],
       };
