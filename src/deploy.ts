@@ -55,6 +55,12 @@ interface DeployCommandResolution {
   missingEnv: string[];
 }
 
+interface GitInfo {
+  branch: string;
+  commit: string;
+  dirty: boolean;
+}
+
 const ROOT = path.resolve(import.meta.dirname, "..");
 const REPORT_DIR = path.join(ROOT, "reports");
 const REPO_ROOT = path.resolve(ROOT, "..");
@@ -158,7 +164,7 @@ async function main(): Promise<void> {
 async function deployProject(project: ProjectDefinition, options: Options): Promise<ProjectExecutionResult> {
   ensureRepo(project.repoPath);
   const git = readGitInfo(project.repoPath);
-  const deploy = resolveDeployCommand(project, options);
+  const deploy = resolveDeployCommand(project, options, git);
 
   if (options.phase !== "plan" && git.dirty && !options.allowDirty) {
     throw new Error(`${project.id} has uncommitted changes. Re-run with --allow-dirty if this is intentional.`);
@@ -193,7 +199,7 @@ async function deployProject(project: ProjectDefinition, options: Options): Prom
 
   if (options.phase === "build" || options.phase === "full") {
     for (const command of project.buildCommands) {
-      runShellCommand(command, project.repoPath, project.id, options);
+      runShellCommand(command, project.repoPath, project.id, options, git);
       result.buildRan = true;
     }
   }
@@ -210,7 +216,7 @@ async function deployProject(project: ProjectDefinition, options: Options): Prom
       console.log(`[deploy] skip deploy: ${result.skipReason}`);
       return result;
     }
-    runShellCommand(deploy.command, project.repoPath, project.id, options);
+    runShellCommand(deploy.command, project.repoPath, project.id, options, git);
     result.deployRan = true;
   }
 
@@ -218,7 +224,7 @@ async function deployProject(project: ProjectDefinition, options: Options): Prom
   return result;
 }
 
-function runShellCommand(command: string, cwd: string, projectId: string, options: Options): void {
+function runShellCommand(command: string, cwd: string, projectId: string, options: Options, git: GitInfo): void {
   const prefix = options.dryRun ? "[dry-run]" : "[exec]";
   console.log(`${prefix} (${projectId}) ${command}`);
   if (options.dryRun) return;
@@ -231,6 +237,10 @@ function runShellCommand(command: string, cwd: string, projectId: string, option
       VIBLY_DEPLOY_PROJECT: projectId,
       VIBLY_DEPLOY_TARGET: options.target,
       VIBLY_DEPLOY_ROOT: REPO_ROOT,
+      VIBLY_DEPLOY_GIT_BRANCH: git.branch,
+      VIBLY_DEPLOY_GIT_COMMIT: git.commit,
+      VIBLY_DEPLOY_GIT_DIRTY: git.dirty ? "true" : "false",
+      VIBLY_DEPLOY_REPO_PATH: cwd,
     },
   });
   if (child.status !== 0) {
@@ -328,7 +338,7 @@ function ensureRepo(repoPath: string): void {
   }
 }
 
-function readGitInfo(repoPath: string): { branch: string; commit: string; dirty: boolean } {
+function readGitInfo(repoPath: string): GitInfo {
   const branch = runGit(repoPath, ["rev-parse", "--abbrev-ref", "HEAD"]);
   const commit = runGit(repoPath, ["rev-parse", "--short", "HEAD"]);
   const dirty = runGit(repoPath, ["status", "--porcelain"]).length > 0;
@@ -353,7 +363,7 @@ function failedResult(project: ProjectDefinition, options: Options, error: unkno
   } catch {
     // Preserve the original failure as the result error.
   }
-  const deploy = resolveDeployCommand(project, options);
+  const deploy = resolveDeployCommand(project, options, git);
   return {
     id: project.id,
     label: project.label,
@@ -378,14 +388,14 @@ function deployEnvVarName(projectId: string): string {
   return `VIBLY_DEPLOY_${projectId.replace(/[^a-zA-Z0-9]+/g, "_").toUpperCase()}_CMD`;
 }
 
-function resolveDeployCommand(project: ProjectDefinition, options: Options): DeployCommandResolution {
+function resolveDeployCommand(project: ProjectDefinition, options: Options, git?: GitInfo): DeployCommandResolution {
   const envVar = deployEnvVarName(project.id);
   const override = process.env[envVar]?.trim();
   if (override) {
     return { envVar, command: override, source: envVar, missingEnv: [] };
   }
 
-  const profile = resolveProfileDeployCommand(project.id, options);
+  const profile = resolveProfileDeployCommand(project.id, options, git);
   if (profile) {
     return { envVar, ...profile };
   }
@@ -397,15 +407,16 @@ function resolveDeployCommand(project: ProjectDefinition, options: Options): Dep
   return { envVar, missingEnv: [] };
 }
 
-function resolveProfileDeployCommand(projectId: string, options: Options): Omit<DeployCommandResolution, "envVar"> | undefined {
-  if (options.profile === "gcp") return resolveGcpDeployCommand(projectId);
+function resolveProfileDeployCommand(projectId: string, options: Options, git?: GitInfo): Omit<DeployCommandResolution, "envVar"> | undefined {
+  if (options.profile === "gcp") return resolveGcpDeployCommand(projectId, git);
   if (options.profile === "npm") return resolveNpmDeployCommand(projectId);
   return undefined;
 }
 
-function resolveGcpDeployCommand(projectId: string): Omit<DeployCommandResolution, "envVar"> | undefined {
+function resolveGcpDeployCommand(projectId: string, git?: GitInfo): Omit<DeployCommandResolution, "envVar"> | undefined {
   const project = requiredEnv("GCP_PROJECT_ID");
   const region = requiredEnv("GCP_REGION");
+  const defaultVmZone = requiredEnv("GCP_VM_ZONE");
   const allowUnauth = envFlag("GCP_RUN_ALLOW_UNAUTHENTICATED", true) ? "--allow-unauthenticated" : "--no-allow-unauthenticated";
   const flags = (name: string) => {
     const value = process.env[name]?.trim();
@@ -425,7 +436,104 @@ function resolveGcpDeployCommand(projectId: string): Omit<DeployCommandResolutio
     };
   };
 
+  const cloudVm = (
+    vmName: string | undefined,
+    zoneName: string | undefined,
+    requiredVars: string[],
+    remoteCommand: string,
+  ): Omit<DeployCommandResolution, "envVar"> => {
+    const missingVmEnv = [
+      project ? null : "GCP_PROJECT_ID",
+      zoneName ? null : requiredVars.find((name) => name.endsWith("_ZONE")) ?? "GCP_VM_ZONE",
+      vmName ? null : requiredVars.find((name) => name.endsWith("_VM")) ?? "GCP_VM_NAME",
+    ].filter(Boolean) as string[];
+    if (missingVmEnv.length > 0) return { source: "gcp", missingEnv: missingVmEnv };
+    return {
+      command: `gcloud compute ssh ${shellQuote(vmName!)} --zone ${shellQuote(zoneName!)} --project ${shellQuote(project!)} --command ${shellQuote(remoteCommand)}`,
+      source: "gcp",
+      missingEnv: [],
+    };
+  };
+
   switch (projectId) {
+    case "vibly-chain": {
+      const vm = process.env.GCP_VIBLY_CHAIN_VM?.trim();
+      const zone = process.env.GCP_VIBLY_CHAIN_ZONE?.trim() || defaultVmZone;
+      const service = process.env.GCP_VIBLY_CHAIN_SERVICE?.trim() || "vibly-solo-node";
+      const mode = process.env.GCP_VIBLY_CHAIN_DEPLOY_MODE?.trim() || "upload";
+      const remoteBin = process.env.GCP_VIBLY_CHAIN_REMOTE_BIN?.trim() || "/usr/local/bin/vibly-solo-node";
+      const stagingPath = process.env.GCP_VIBLY_CHAIN_REMOTE_STAGING_PATH?.trim() || "/tmp/vibly-solo-node";
+      const localBin = process.env.GCP_VIBLY_CHAIN_BINARY_PATH?.trim() || "./target/release/vibly-solo-node";
+      const remoteDir = process.env.GCP_VIBLY_CHAIN_REMOTE_DIR?.trim() || "/opt/vibly/vibly-chain";
+      if (mode === "remote-build") {
+        return cloudVm(
+          vm,
+          zone,
+          ["GCP_VIBLY_CHAIN_VM", "GCP_VIBLY_CHAIN_ZONE"],
+          [
+            `cd ${shellQuote(remoteDir)}`,
+            "git fetch --all --tags",
+            `git checkout ${shellQuote(git?.branch ?? "main")}`,
+            "git pull --ff-only",
+            "cargo build --release -p vibly-solo-node",
+            `sudo install -m 755 target/release/vibly-solo-node ${shellQuote(remoteBin)}`,
+            `sudo systemctl restart ${shellQuote(service)}`,
+            `sudo systemctl --no-pager --full status ${shellQuote(service)} --lines=20`,
+          ].join(" && "),
+        );
+      }
+      if (!project || !vm || !zone) {
+        return {
+          source: "gcp",
+          missingEnv: [
+            project ? null : "GCP_PROJECT_ID",
+            vm ? null : "GCP_VIBLY_CHAIN_VM",
+            zone ? null : "GCP_VIBLY_CHAIN_ZONE or GCP_VM_ZONE",
+          ].filter(Boolean) as string[],
+        };
+      }
+      return {
+        command: [
+          `gcloud compute scp ${shellQuote(localBin)} ${shellQuote(`${vm}:${stagingPath}`)} --zone ${shellQuote(zone)} --project ${shellQuote(project)}`,
+          `gcloud compute ssh ${shellQuote(vm)} --zone ${shellQuote(zone)} --project ${shellQuote(project)} --command ${shellQuote(
+            [
+              `sudo install -m 755 ${shellQuote(stagingPath)} ${shellQuote(remoteBin)}`,
+              `rm -f ${shellQuote(stagingPath)}`,
+              `sudo systemctl restart ${shellQuote(service)}`,
+              `sudo systemctl --no-pager --full status ${shellQuote(service)} --lines=20`,
+            ].join(" && "),
+          )}`,
+        ].join(" && "),
+        source: "gcp",
+        missingEnv: [],
+      };
+    }
+    case "vibly-indexer": {
+      const vm = process.env.GCP_VIBLY_INDEXER_VM?.trim();
+      const zone = process.env.GCP_VIBLY_INDEXER_ZONE?.trim() || defaultVmZone;
+      const remoteDir = process.env.GCP_VIBLY_INDEXER_REMOTE_DIR?.trim() || "/opt/vibly/vibly-indexer";
+      const mode = process.env.GCP_VIBLY_INDEXER_DEPLOY_MODE?.trim() || "remote-build";
+      const endpoint = process.env.GCP_VIBLY_INDEXER_ENDPOINT?.trim() || "ws://127.0.0.1:9944";
+      const chainId = process.env.GCP_VIBLY_INDEXER_CHAIN_ID?.trim() || "substrate:vibly-solo";
+      const startBlock = process.env.GCP_VIBLY_INDEXER_START_BLOCK?.trim() || "1";
+      const composeEnv = `ENDPOINT=${shellQuote(endpoint)} CHAIN_ID=${shellQuote(chainId)} START_BLOCK=${shellQuote(startBlock)}`;
+      const steps = [`cd ${shellQuote(remoteDir)}`];
+      if (mode === "remote-build") {
+        steps.push(
+          "git fetch --all --tags",
+          `git checkout ${shellQuote(git?.branch ?? "main")}`,
+          "git pull --ff-only",
+          "npm ci",
+          "npm run build",
+        );
+      }
+      steps.push(
+        `${composeEnv} docker compose pull`,
+        `${composeEnv} docker compose up -d --remove-orphans`,
+        "docker compose ps",
+      );
+      return cloudVm(vm, zone, ["GCP_VIBLY_INDEXER_VM", "GCP_VIBLY_INDEXER_ZONE"], steps.join(" && "));
+    }
     case "vibly-coordinator": {
       const service = process.env.GCP_VIBLY_COORDINATOR_SERVICE?.trim() || "vibly-coordinator";
       return cloudRun(service, "GCP_VIBLY_COORDINATOR_FLAGS");

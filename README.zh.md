@@ -33,6 +33,20 @@ Live LLM 成功后还会写入 `reports/live-llm-content-<timestamp>.md`，其�
 - 执行该仓库预设的 build/typecheck 命令
 - 按环境变量执行真实部署 hook，例如 `VIBLY_DEPLOY_VIBLY_CONSOLE_CMD`
 
+建议的生产拓扑：
+
+- `vibly-chain`：部署 `vibly-solo-node` 到 VM / 裸机，并由 `systemd` 托管
+- `vibly-indexer`：部署到带 Docker Compose 的 VM，因为它需要同时运行 Postgres + SubQuery
+- `vibly-coordinator`：部署到 Cloud Run 或其他无状态应用宿主，但后端必须接外部 Postgres
+- `vibly-console`：如果使用 Auth.js 代理模式，建议部署到 Cloud Run；只有 direct/public 模式才适合纯静态托管
+
+内建的 `--profile=gcp` 现在对 `vibly-chain` 支持两种常见 VM 发布方式：
+
+- `GCP_VIBLY_CHAIN_DEPLOY_MODE=upload`：本地编译后上传二进制，再重启 `systemd`
+- `GCP_VIBLY_CHAIN_DEPLOY_MODE=remote-build`：SSH 到远端机器编译，再重启 `systemd`
+
+对可重复的生产发布来说，本地构建 + 制品上传通常更合适，因为更快、也更容易校验版本。远端构建则更适合首次开荒，或目标主机 ABI / toolchain 必须与构建产物完全一致的场景。
+
 当前纳管的项目 id：
 
 - `concord`
@@ -109,6 +123,7 @@ plan 输出会展示每个项目的 build 命令和解析后的 deploy 命令。
 
 - [templates/deploy/gcp.env.example](/home/libingjiang47/vibly-e2e-lab/templates/deploy/gcp.env.example)
 - [templates/deploy/npm-publish.env.example](/home/libingjiang47/vibly-e2e-lab/templates/deploy/npm-publish.env.example)
+- [templates/deploy/bootstrap-vibly-indexer-vm.sh](/home/libingjiang47/vibly-e2e-lab/templates/deploy/bootstrap-vibly-indexer-vm.sh)
 
 示例：
 
@@ -118,7 +133,7 @@ set -a
 source templates/deploy/gcp.env.example
 set +a
 pnpm deploy:gcp:plan
-pnpm deploy:gcp -- --only=vibly-coordinator,vibly-console
+pnpm deploy:gcp -- --only=vibly-chain,vibly-indexer,vibly-coordinator,vibly-console
 
 # npm 预览 / 发布
 set -a
@@ -129,6 +144,31 @@ pnpm deploy:npm -- --only=concord,vibly-client,vibly-coordinator-http-contract
 ```
 
 生产发布时建议组合使用 `--phase=full --require-deploy-hook`，确保每个选中项目都有内建模板命令或显式的 `VIBLY_DEPLOY_<PROJECT_ID>_CMD`。
+
+### 生产说明
+
+- `vibly-indexer` 虽然已纳入 deploy planner，但它并不是 serverless 服务。正确的线上部署仍然需要拉起它的 Docker Compose 栈，或者等价的 Postgres + SubQuery 拓扑。
+- `vibly-coordinator` 实际上也不是“纯无服务”。应用进程可以跑在 Cloud Run 上，但生产环境必须使用 `STORAGE_MODE=postgres` 并连接外部 Postgres；Coordinator 启动时会自行跑迁移。
+- 公网 `Lumen` 和 `Monolith` 不需要单独再部署一个本地 payment chain。`Lumen` 直接使用 Paseo RPC 处理 Get VIB 的 relay 侧转账，`Monolith` 直接使用 Polkadot 主网 RPC。本地 E2E / 手动 Get VIB 联调时额外启的 payment chain，只属于实验室环境。
+
+### 初始化一台新的 indexer VM
+
+新开的 Debian/Ubuntu VM，建议先执行一次 bootstrap 脚本，再进入常规 deploy 流程：
+
+```bash
+gcloud compute scp templates/deploy/bootstrap-vibly-indexer-vm.sh \
+  vibly-indexer-vm:/tmp/bootstrap-vibly-indexer-vm.sh \
+  --zone asia-east1-b
+
+gcloud compute ssh vibly-indexer-vm --zone asia-east1-b --command "
+  sudo REPO_URL=git@github.com:your-org/vibly-indexer.git \
+       REPO_BRANCH=main \
+       CHAIN_ENDPOINT=ws://127.0.0.1:9944 \
+       bash /tmp/bootstrap-vibly-indexer-vm.sh
+"
+```
+
+初始化完成后，后续就可以直接用 `pnpm deploy:gcp -- --only=vibly-indexer` 复用远端目录，只做 repo/build/compose 的刷新。
 
 ## 测试内容
 

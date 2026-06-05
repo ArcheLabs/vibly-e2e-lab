@@ -60,6 +60,20 @@ Reports are written to `reports/` after every run:
 
 `src/deploy.ts` gives us one shared entrypoint for release prep across all main repos. It tracks each repository's path, its default build command, and an optional deploy hook loaded from env.
 
+Recommended production topology:
+
+- `vibly-chain`: deploy `vibly-solo-node` to a VM or bare-metal host with `systemd`
+- `vibly-indexer`: deploy on a VM with Docker Compose because it runs Postgres + SubQuery services
+- `vibly-coordinator`: deploy on Cloud Run or another stateless app host, backed by external Postgres
+- `vibly-console`: deploy on Cloud Run when using Auth.js proxy mode; static hosting is suitable only for direct/public mode
+
+The built-in `--profile=gcp` now covers two common VM flows for `vibly-chain`:
+
+- `GCP_VIBLY_CHAIN_DEPLOY_MODE=upload`: build locally, upload the binary, restart `systemd`
+- `GCP_VIBLY_CHAIN_DEPLOY_MODE=remote-build`: ssh into the VM, build there, then restart `systemd`
+
+For repeatable production rollouts, local build + artifact upload is usually the better default because it is faster and easier to verify. Remote build is still useful for first-time provisioning or when the target host ABI/toolchain must exactly match the build output.
+
 Managed project ids:
 
 - `concord`
@@ -136,6 +150,7 @@ Template env files live here:
 
 - [templates/deploy/gcp.env.example](/home/libingjiang47/vibly-e2e-lab/templates/deploy/gcp.env.example)
 - [templates/deploy/npm-publish.env.example](/home/libingjiang47/vibly-e2e-lab/templates/deploy/npm-publish.env.example)
+- [templates/deploy/bootstrap-vibly-indexer-vm.sh](/home/libingjiang47/vibly-e2e-lab/templates/deploy/bootstrap-vibly-indexer-vm.sh)
 
 Examples:
 
@@ -145,7 +160,7 @@ set -a
 source templates/deploy/gcp.env.example
 set +a
 pnpm deploy:gcp:plan
-pnpm deploy:gcp -- --only=vibly-coordinator,vibly-console
+pnpm deploy:gcp -- --only=vibly-chain,vibly-indexer,vibly-coordinator,vibly-console
 
 # npm plan / publish
 set -a
@@ -156,6 +171,31 @@ pnpm deploy:npm -- --only=concord,vibly-client,vibly-coordinator-http-contract
 ```
 
 For a stricter production run, combine `--phase=full --require-deploy-hook` so every selected project must have either a built-in profile command or an explicit `VIBLY_DEPLOY_<PROJECT_ID>_CMD`.
+
+### Production notes
+
+- `vibly-indexer` is included in the deploy planner, but it is not a serverless service. A correct hosted deployment must still run its Docker Compose stack or an equivalent Postgres + SubQuery topology.
+- `vibly-coordinator` is also not fully serverless in practice. The app process can run on Cloud Run, but `STORAGE_MODE=postgres` and an external Postgres database are mandatory in production. Coordinator startup runs migrations against that database.
+- Public `Lumen` and `Monolith` environments do not need a separately deployed local payment chain. `Lumen` uses Paseo RPCs for relay-side transfers; `Monolith` uses Polkadot mainnet RPCs. The extra payment chain only exists in local E2E / manual Get VIB labs.
+
+### Bootstrap a fresh indexer VM
+
+Use the bootstrap script once on a new Debian/Ubuntu VM before the normal deploy flow:
+
+```bash
+gcloud compute scp templates/deploy/bootstrap-vibly-indexer-vm.sh \
+  vibly-indexer-vm:/tmp/bootstrap-vibly-indexer-vm.sh \
+  --zone asia-east1-b
+
+gcloud compute ssh vibly-indexer-vm --zone asia-east1-b --command "
+  sudo REPO_URL=git@github.com:your-org/vibly-indexer.git \
+       REPO_BRANCH=main \
+       CHAIN_ENDPOINT=ws://127.0.0.1:9944 \
+       bash /tmp/bootstrap-vibly-indexer-vm.sh
+"
+```
+
+After that, `pnpm deploy:gcp -- --only=vibly-indexer` can reuse the prepared remote directory and only refresh repo/build/compose state.
 
 ## Scenarios
 
