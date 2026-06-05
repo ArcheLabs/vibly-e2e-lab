@@ -39,6 +39,12 @@ pnpm dev:get-vib-console
 # If the lab runs on a remote server and you SSH-forward local 3002 -> remote 3001:
 VIBLY_E2E_PUBLIC_CONSOLE_PORT=3002 pnpm dev:get-vib-console
 
+# Cross-repo deployment planner / orchestrator
+pnpm deploy:all
+pnpm deploy:build
+pnpm deploy:gcp:plan
+pnpm deploy:npm:plan
+
 # Stake-specific scenarios only
 pnpm e2e:stake
 ```
@@ -49,6 +55,108 @@ Reports are written to `reports/` after every run:
 - `reports/live-llm-<ts>.json` — persistent live LLM run summary
 - `reports/live-llm-content-<ts>.md` — readable generated content: observations, proposal body, discussion, reviews, artifacts, and knowledge entries
 - `data/live-runs/<runName>/state.json` — resumable live LLM checkpoint state
+
+## Deployment orchestrator
+
+`src/deploy.ts` gives us one shared entrypoint for release prep across all main repos. It tracks each repository's path, its default build command, and an optional deploy hook loaded from env.
+
+Managed project ids:
+
+- `concord`
+- `vibly-chain`
+- `vibly-client`
+- `vibly-console`
+- `vibly-coordinator`
+- `vibly-docs`
+- `vibly-e2e-lab`
+- `vibly-indexer`
+- `vibly-library`
+- `vibly-site`
+- `vibly-coordinator-http-contract`
+- `archelabs-site`
+
+Examples:
+
+```bash
+# Safe default: print the plan only
+pnpm deploy:all
+
+# List project ids before selecting a subset
+pnpm deploy:all -- --list
+
+# Build every registered repo
+pnpm deploy:build
+
+# Build + deploy only selected projects
+VIBLY_DEPLOY_TARGET=testnet \
+VIBLY_DEPLOY_VIBLY_CONSOLE_CMD="pnpm build && gcloud run deploy vibly-console --source ." \
+VIBLY_DEPLOY_VIBLY_COORDINATOR_CMD="pnpm build && gcloud run deploy vibly-coordinator --source ." \
+pnpm deploy:all -- --phase=full --only=vibly-console,vibly-coordinator
+
+# Intentionally allow uncommitted changes
+pnpm deploy:all -- --phase=build --allow-dirty
+```
+
+Useful flags:
+
+| Flag | Description |
+|---|---|
+| `--phase=plan` | Default. Print what would run |
+| `--phase=build` | Run build/typecheck commands only |
+| `--phase=deploy` | Run deploy hooks only |
+| `--phase=full` | Build first, then run deploy hooks |
+| `--list` | List registered project ids and build commands |
+| `--only=a,b` | Restrict to specific project ids |
+| `--skip=a,b` | Exclude specific project ids |
+| `--allow-dirty` | Do not fail on uncommitted changes |
+| `--continue-on-error` | Keep processing later projects after a failed project |
+| `--require-deploy-hook` | Fail deploy/full phases if a selected project has no deploy hook |
+| `--dry-run` | Print commands without executing them |
+| `--target=name` | Pass a target label via `VIBLY_DEPLOY_TARGET` |
+
+Deploy hooks are opt-in and per repo. The hook env name is:
+
+```bash
+VIBLY_DEPLOY_<PROJECT_ID>_CMD
+```
+
+For example, `vibly-console` maps to `VIBLY_DEPLOY_VIBLY_CONSOLE_CMD`.
+
+Plan output prints each build command and resolved deploy command. Built-in profiles also show missing env vars, such as `GCP_VIBLY_SITE_BUCKET`, instead of silently skipping that project.
+
+Each run writes a JSON summary to `reports/deploy-<timestamp>.json`.
+
+### Built-in templates
+
+Two profiles are built in:
+
+- `--profile=gcp` for Google Cloud deployment hooks
+- `--profile=npm` for npm package publishing hooks
+
+Template env files live here:
+
+- [templates/deploy/gcp.env.example](/home/libingjiang47/vibly-e2e-lab/templates/deploy/gcp.env.example)
+- [templates/deploy/npm-publish.env.example](/home/libingjiang47/vibly-e2e-lab/templates/deploy/npm-publish.env.example)
+
+Examples:
+
+```bash
+# GCP plan / deploy
+set -a
+source templates/deploy/gcp.env.example
+set +a
+pnpm deploy:gcp:plan
+pnpm deploy:gcp -- --only=vibly-coordinator,vibly-console,vibly-site
+
+# npm plan / publish
+set -a
+source templates/deploy/npm-publish.env.example
+set +a
+pnpm deploy:npm:plan
+pnpm deploy:npm -- --only=concord,vibly-client,vibly-coordinator-http-contract
+```
+
+For a stricter production run, combine `--phase=full --require-deploy-hook` so every selected project must have either a built-in profile command or an explicit `VIBLY_DEPLOY_<PROJECT_ID>_CMD`.
 
 ## Scenarios
 
@@ -221,6 +329,12 @@ knowledge/         Seed knowledge entries (literature index, Goldbach background
 | `pnpm e2e:get-vib` | Get VIB flow smoke: quote/order/finalize/manifest/summary/proof/records, with optional chain claim when chain RPC is configured |
 | `pnpm e2e:get-vib:polkadot-local` | Local Polkadot relay + local chain Get VIB flow: relay deposit observation/finalize + on-chain claim verification |
 | `pnpm dev:get-vib-console` | Manual Get VIB Console lab: starts local Vibly/payment chains, Coordinator, and Console; keeps them alive for browser testing; does not run Playwright or agents |
+| `pnpm deploy:all` | Cross-repo deployment planner/orchestrator. Default phase is `plan` |
+| `pnpm deploy:build` | Cross-repo build orchestration across all registered repos |
+| `pnpm deploy:gcp:plan` | Preview built-in Google Cloud deploy hooks |
+| `pnpm deploy:gcp` | Execute built-in Google Cloud deploy hooks |
+| `pnpm deploy:npm:plan` | Preview built-in npm publish hooks |
+| `pnpm deploy:npm` | Execute built-in npm publish hooks |
 | `pnpm e2e:stake` | Stake scenarios A-D only |
 | `pnpm e2e:stake:unbond` | Stake scenarios with `VIBLY_E2E_UNBOND=true` |
 | `pnpm e2e:stake:stale-indexer` | Stake scenarios with stale indexer simulation |

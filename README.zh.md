@@ -15,11 +15,121 @@ VIBLY_E2E_RUN_NAME=my-run pnpm e2e:live-llm:resume  # 断点继续
 VIBLY_E2E_SKIP_CONSOLE=true pnpm e2e:local   # 跳过 Console 冒烟测试，适合 CI
 pnpm dev:get-vib-console    # 手动验证 Get VIB UI：启动本地链、Coordinator、Console；本地 claim root 默认每 2 分钟上传一次；不跑 Playwright，也不启动 agent
 VIBLY_E2E_PUBLIC_CONSOLE_PORT=3002 pnpm dev:get-vib-console  # SSH 转发本地 3002 -> 远程 3001 时使用
+pnpm deploy:all            # 跨仓库部署计划预览
+pnpm deploy:build          # 跨仓库统一构建
+pnpm deploy:gcp:plan       # GCP 模板预览
+pnpm deploy:npm:plan       # npm 发布模板预览
 ```
 
 每次运行结束后，JSON 报告会写入 `reports/deterministic-<timestamp>.json`。
 Live LLM 状态会写入 `data/live-runs/<runName>/state.json`，通过 `VIBLY_E2E_RUN_NAME` 继续同一任务。
 Live LLM 成功后还会写入 `reports/live-llm-content-<timestamp>.md`，其中包含观察、提案正文、讨论贡献、审核、成果和知识库更新的可读内容。
+
+## 部署编排脚本
+
+`src/deploy.ts` 提供了一个统一的跨仓库部署编排入口。它会：
+
+- 读取每个仓库的 git 分支、commit 和 dirty 状态
+- 执行该仓库预设的 build/typecheck 命令
+- 按环境变量执行真实部署 hook，例如 `VIBLY_DEPLOY_VIBLY_CONSOLE_CMD`
+
+当前纳管的项目 id：
+
+- `concord`
+- `vibly-chain`
+- `vibly-client`
+- `vibly-console`
+- `vibly-coordinator`
+- `vibly-docs`
+- `vibly-e2e-lab`
+- `vibly-indexer`
+- `vibly-library`
+- `vibly-site`
+- `vibly-coordinator-http-contract`
+- `archelabs-site`
+
+常见用法：
+
+```bash
+# 默认最安全：只输出计划，不执行 build/deploy
+pnpm deploy:all
+
+# 先列出可选择的项目 id
+pnpm deploy:all -- --list
+
+# 对所有注册仓库执行 build/typecheck
+pnpm deploy:build
+
+# 只部署选中的项目
+VIBLY_DEPLOY_TARGET=testnet \
+VIBLY_DEPLOY_VIBLY_CONSOLE_CMD="pnpm build && gcloud run deploy vibly-console --source ." \
+VIBLY_DEPLOY_VIBLY_COORDINATOR_CMD="pnpm build && gcloud run deploy vibly-coordinator --source ." \
+pnpm deploy:all -- --phase=full --only=vibly-console,vibly-coordinator
+
+# 明确允许 dirty working tree
+pnpm deploy:all -- --phase=build --allow-dirty
+```
+
+常用参数：
+
+| 参数 | 说明 |
+|---|---|
+| `--phase=plan` | 默认值，只展示将要执行的计划 |
+| `--phase=build` | 只执行 build/typecheck |
+| `--phase=deploy` | 只执行 deploy hook |
+| `--phase=full` | 先 build，再执行 deploy hook |
+| `--list` | 列出已注册 project id 和 build 命令 |
+| `--only=a,b` | 只包含指定 project id |
+| `--skip=a,b` | 排除指定 project id |
+| `--allow-dirty` | 不因未提交改动而失败 |
+| `--continue-on-error` | 某个项目失败后继续处理后续项目 |
+| `--require-deploy-hook` | deploy/full 阶段要求每个选中项目都必须有部署 hook |
+| `--dry-run` | 打印命令但不真正执行 |
+| `--target=name` | 通过 `VIBLY_DEPLOY_TARGET` 传递目标环境标签 |
+
+deploy hook 的环境变量命名规则：
+
+```bash
+VIBLY_DEPLOY_<PROJECT_ID>_CMD
+```
+
+例如 `vibly-console` 对应 `VIBLY_DEPLOY_VIBLY_CONSOLE_CMD`。
+
+plan 输出会展示每个项目的 build 命令和解析后的 deploy 命令。内建 profile 如果缺少环境变量，也会直接提示具体变量名，例如 `GCP_VIBLY_SITE_BUCKET`，不会静默跳过。
+
+每次运行都会生成 `reports/deploy-<timestamp>.json` 报告。
+
+### 内建模板
+
+目前内建了两类 profile：
+
+- `--profile=gcp`：Google Cloud 部署模板
+- `--profile=npm`：npm 包发布模板
+
+模板环境变量文件：
+
+- [templates/deploy/gcp.env.example](/home/libingjiang47/vibly-e2e-lab/templates/deploy/gcp.env.example)
+- [templates/deploy/npm-publish.env.example](/home/libingjiang47/vibly-e2e-lab/templates/deploy/npm-publish.env.example)
+
+示例：
+
+```bash
+# GCP 预览 / 部署
+set -a
+source templates/deploy/gcp.env.example
+set +a
+pnpm deploy:gcp:plan
+pnpm deploy:gcp -- --only=vibly-coordinator,vibly-console,vibly-site
+
+# npm 预览 / 发布
+set -a
+source templates/deploy/npm-publish.env.example
+set +a
+pnpm deploy:npm:plan
+pnpm deploy:npm -- --only=concord,vibly-client,vibly-coordinator-http-contract
+```
+
+生产发布时建议组合使用 `--phase=full --require-deploy-hook`，确保每个选中项目都有内建模板命令或显式的 `VIBLY_DEPLOY_<PROJECT_ID>_CMD`。
 
 ## 测试内容
 
@@ -108,6 +218,12 @@ knowledge/         — 初始知识条目（文献索引、哥德巴赫背景、
 | `pnpm e2e:get-vib` | Get VIB 全流程冒烟：获取配置、报价、创建订单、确认入账、生成 manifest、查询 summary/proof/records；配置 `VIBLY_E2E_GET_VIB_CHAIN_RPC` 时会额外执行链上 claim 验证 |
 | `pnpm e2e:get-vib:polkadot-local` | 面向本地 Polkadot relay + 本地链联调的 Get VIB 流程：发送 relay DOT、等待观察入账并 finalize，然后执行链上 claim 验证 |
 | `pnpm dev:get-vib-console` | 手动 Get VIB Console 联调：启动本地 Vibly 链、支付链、Coordinator 和 Console，并保持运行；不执行 Playwright，不启动 agent daemon |
+| `pnpm deploy:all` | 跨仓库部署计划 / 编排入口，默认 phase 为 `plan` |
+| `pnpm deploy:build` | 跨仓库统一 build/typecheck |
+| `pnpm deploy:gcp:plan` | 预览内建的 Google Cloud 部署模板 |
+| `pnpm deploy:gcp` | 执行内建的 Google Cloud 部署模板 |
+| `pnpm deploy:npm:plan` | 预览内建的 npm 发布模板 |
+| `pnpm deploy:npm` | 执行内建的 npm 发布模板 |
 | `pnpm e2e:live-llm:get-vib-local` | Live LLM 运行时启用本地 Get VIB relay 配置，便于 Console 的 Get VIB 页面联调 |
 | `pnpm e2e:live-llm:resume:get-vib-local` | 与上条相同，但用于 resume 模式 |
 | `pnpm e2e:console` | 启动本地网络 profile 后运行 Console Playwright 冒烟测试 |
