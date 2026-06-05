@@ -60,7 +60,7 @@ pnpm deploy:all -- --list
 pnpm deploy:build
 
 # 只部署选中的项目
-VIBLY_DEPLOY_TARGET=testnet \
+VIBLY_DEPLOY_TARGET=lumen \
 VIBLY_DEPLOY_VIBLY_CONSOLE_CMD="pnpm build && gcloud run deploy vibly-console --source ." \
 VIBLY_DEPLOY_VIBLY_COORDINATOR_CMD="pnpm build && gcloud run deploy vibly-coordinator --source ." \
 pnpm deploy:all -- --phase=full --only=vibly-console,vibly-coordinator
@@ -159,6 +159,11 @@ OPENAI_MODEL=deepseek-chat
 任何 OpenAI 兼容的端点均可使用（OpenAI、Anthropic 代理、本地 Ollama 等）。未设置 `OPENAI_API_KEY` 时，半自主模式会被静默跳过。
 
 所有本地 E2E 命令都会启动完整网络 profile：Coordinator、Console、Vibly 链和独立支付链。默认端口为 Vibly 链 `9944`、支付链 `9945`；如果本地无法启动 `vibly-solo-node` 会直接报错，可用 `VIBLY_E2E_BUILD_CHAIN=true` 自动构建。
+
+实验室当前对外暴露的远程网络命名口径为：
+
+- `substrate:vibly-testnet` -> `Lumen`
+- `substrate:vibly-incentivized-testnet` -> `Monolith`
 
 Live LLM 模式要求设置 `OPENAI_API_KEY`。常用命令：
 

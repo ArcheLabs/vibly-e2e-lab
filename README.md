@@ -87,7 +87,7 @@ pnpm deploy:all -- --list
 pnpm deploy:build
 
 # Build + deploy only selected projects
-VIBLY_DEPLOY_TARGET=testnet \
+VIBLY_DEPLOY_TARGET=lumen \
 VIBLY_DEPLOY_VIBLY_CONSOLE_CMD="pnpm build && gcloud run deploy vibly-console --source ." \
 VIBLY_DEPLOY_VIBLY_COORDINATOR_CMD="pnpm build && gcloud run deploy vibly-coordinator --source ." \
 pnpm deploy:all -- --phase=full --only=vibly-console,vibly-coordinator
@@ -195,6 +195,11 @@ Starts multiple real `vibly-client daemon start` processes with `daemon.llmE2E=t
 ## Real-chain pipeline
 
 E2E commands boot or verify the whole network profile: Coordinator, Console, Vibly chain, and a separate payment chain. Local runs fail fast if `vibly-solo-node` cannot be started; use `VIBLY_E2E_BUILD_CHAIN=true` to build it automatically.
+
+The public remote profiles exposed by the lab follow the current naming:
+
+- `substrate:vibly-testnet` -> `Lumen`
+- `substrate:vibly-incentivized-testnet` -> `Monolith`
 
 When `VIBLY_E2E_MOCK_STAKE` is unset, the runner also enables the real stake path:
 
