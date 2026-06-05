@@ -598,6 +598,7 @@ async function startCoordinator(runRoot: string, preserveDb: boolean): Promise<C
         GET_VIB_DEPOSIT_SCAN_INTERVAL_MS: process.env.GET_VIB_DEPOSIT_SCAN_INTERVAL_MS ?? process.env.VIBLY_E2E_GET_VIB_SCAN_INTERVAL_MS ?? "1500",
         GET_VIB_DEPOSIT_FINALITY_BLOCKS: process.env.GET_VIB_DEPOSIT_FINALITY_BLOCKS ?? process.env.VIBLY_E2E_GET_VIB_FINALITY_BLOCKS ?? "1",
         GET_VIB_RELAY_TOKEN_DECIMALS: process.env.GET_VIB_RELAY_TOKEN_DECIMALS ?? process.env.VIBLY_E2E_GET_VIB_RELAY_DECIMALS ?? "10",
+        GET_VIB_ROOT_UPLOAD_INTERVAL_MS: process.env.GET_VIB_ROOT_UPLOAD_INTERVAL_MS ?? "120000",
       }
     : {};
 

@@ -78,6 +78,7 @@ async function startCoordinator(paymentRpcUrl: string): Promise<ChildProcessWith
       GET_VIB_RELAY_RPC_URL: paymentRpcUrl,
       GET_VIB_RELAY_CHAIN_ID: "polkadot-local",
       GET_VIB_DEPOSIT_SCAN_INTERVAL_MS: "1500",
+      GET_VIB_ROOT_UPLOAD_INTERVAL_MS: process.env.GET_VIB_ROOT_UPLOAD_INTERVAL_MS ?? "120000",
     },
     stdio: "pipe",
   });

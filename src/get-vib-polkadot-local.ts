@@ -172,6 +172,7 @@ async function startCoordinator(): Promise<ChildProcessWithoutNullStreams> {
       GET_VIB_RELAY_TOKEN_DECIMALS: String(RELAY_TOKEN_DECIMALS),
       GET_VIB_DEPOSIT_SCAN_INTERVAL_MS: process.env.GET_VIB_DEPOSIT_SCAN_INTERVAL_MS ?? "1500",
       GET_VIB_DEPOSIT_FINALITY_BLOCKS: process.env.GET_VIB_DEPOSIT_FINALITY_BLOCKS ?? "1",
+      GET_VIB_ROOT_UPLOAD_INTERVAL_MS: process.env.GET_VIB_ROOT_UPLOAD_INTERVAL_MS ?? "120000",
     },
     stdio: "pipe",
   });
