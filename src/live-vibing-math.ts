@@ -662,7 +662,7 @@ function defaultConsoleNetworkId(): string {
 }
 
 function defaultConsoleNetworkName(): string {
-  return EXTERNAL_COORDINATOR ? "Testnet" : resolveConsoleLocalProfile().label;
+  return EXTERNAL_COORDINATOR ? "Lumen" : resolveConsoleLocalProfile().label;
 }
 
 function resolveConsoleLocalProfile(): E2eNetworkProfile {

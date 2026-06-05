@@ -62,7 +62,7 @@ export function remoteNetworkProfiles(): E2eNetworkProfile[] {
   return [
     {
       id: "substrate:vibly-testnet",
-      label: "Testnet",
+      label: "Lumen",
       stage: "testnet",
       coordinatorUrls: testnetCoordinator ? [testnetCoordinator] : [],
       viblyRpcUrls: testnetVibly,
@@ -73,7 +73,7 @@ export function remoteNetworkProfiles(): E2eNetworkProfile[] {
     },
     {
       id: "substrate:vibly-incentivized-testnet",
-      label: "Incentivized Testnet",
+      label: "Monolith",
       stage: "mainnet",
       coordinatorUrls: incentivizedCoordinator ? [incentivizedCoordinator] : [],
       viblyRpcUrls: incentivizedVibly,
