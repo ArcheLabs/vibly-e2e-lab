@@ -109,28 +109,10 @@ const PROJECTS: ProjectDefinition[] = [
     buildCommands: ["npm run build"],
   },
   {
-    id: "vibly-library",
-    label: "Vibly Library",
-    repoPath: path.join(REPO_ROOT, "vibly-library"),
-    buildCommands: ["pnpm build"],
-  },
-  {
-    id: "vibly-site",
-    label: "Vibly Site",
-    repoPath: path.join(REPO_ROOT, "vibly-site"),
-    buildCommands: ["pnpm build"],
-  },
-  {
     id: "vibly-coordinator-http-contract",
     label: "Coordinator HTTP Contract",
     repoPath: path.join(REPO_ROOT, "vibly-coordinator-http-contract"),
     buildCommands: ["pnpm build"],
-  },
-  {
-    id: "archelabs-site",
-    label: "Archelabs Site",
-    repoPath: path.join(REPO_ROOT, "archelabs-site"),
-    buildCommands: ["npm run build"],
   },
 ];
 
@@ -451,20 +433,6 @@ function resolveGcpDeployCommand(projectId: string): Omit<DeployCommandResolutio
     case "vibly-console": {
       const service = process.env.GCP_VIBLY_CONSOLE_SERVICE?.trim() || "vibly-console";
       return cloudRun(service, "GCP_VIBLY_CONSOLE_FLAGS");
-    }
-    case "vibly-library": {
-      const service = process.env.GCP_VIBLY_LIBRARY_SERVICE?.trim() || "vibly-library";
-      return cloudRun(service, "GCP_VIBLY_LIBRARY_FLAGS");
-    }
-    case "vibly-site": {
-      const bucket = process.env.GCP_VIBLY_SITE_BUCKET?.trim();
-      if (!bucket) return { source: "gcp", missingEnv: ["GCP_VIBLY_SITE_BUCKET"] };
-      return { command: `gsutil -m rsync -r -d dist ${shellQuote(`gs://${bucket}`)}`, source: "gcp", missingEnv: [] };
-    }
-    case "archelabs-site": {
-      const bucket = process.env.GCP_ARCHELABS_SITE_BUCKET?.trim();
-      if (!bucket) return { source: "gcp", missingEnv: ["GCP_ARCHELABS_SITE_BUCKET"] };
-      return { command: `gsutil -m rsync -r -d dist ${shellQuote(`gs://${bucket}`)}`, source: "gcp", missingEnv: [] };
     }
     default:
       return undefined;

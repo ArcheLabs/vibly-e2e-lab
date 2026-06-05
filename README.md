@@ -70,10 +70,9 @@ Managed project ids:
 - `vibly-docs`
 - `vibly-e2e-lab`
 - `vibly-indexer`
-- `vibly-library`
-- `vibly-site`
 - `vibly-coordinator-http-contract`
-- `archelabs-site`
+
+`vibly-site`, `vibly-library`, and `archelabs-site` are intentionally not managed here because they are deployed through their own GitHub Pages workflows.
 
 Examples:
 
@@ -122,7 +121,7 @@ VIBLY_DEPLOY_<PROJECT_ID>_CMD
 
 For example, `vibly-console` maps to `VIBLY_DEPLOY_VIBLY_CONSOLE_CMD`.
 
-Plan output prints each build command and resolved deploy command. Built-in profiles also show missing env vars, such as `GCP_VIBLY_SITE_BUCKET`, instead of silently skipping that project.
+Plan output prints each build command and resolved deploy command. Built-in profiles also show missing env vars, such as `GCP_PROJECT_ID` or `GCP_REGION`, instead of silently skipping that project.
 
 Each run writes a JSON summary to `reports/deploy-<timestamp>.json`.
 
@@ -146,7 +145,7 @@ set -a
 source templates/deploy/gcp.env.example
 set +a
 pnpm deploy:gcp:plan
-pnpm deploy:gcp -- --only=vibly-coordinator,vibly-console,vibly-site
+pnpm deploy:gcp -- --only=vibly-coordinator,vibly-console
 
 # npm plan / publish
 set -a

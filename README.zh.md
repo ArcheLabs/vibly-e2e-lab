@@ -43,10 +43,9 @@ Live LLM 成功后还会写入 `reports/live-llm-content-<timestamp>.md`，其�
 - `vibly-docs`
 - `vibly-e2e-lab`
 - `vibly-indexer`
-- `vibly-library`
-- `vibly-site`
 - `vibly-coordinator-http-contract`
-- `archelabs-site`
+
+`vibly-site`、`vibly-library` 和 `archelabs-site` 已由各自 GitHub Pages workflow 部署，因此不再纳入这里的跨仓库部署脚本。
 
 常见用法：
 
@@ -95,7 +94,7 @@ VIBLY_DEPLOY_<PROJECT_ID>_CMD
 
 例如 `vibly-console` 对应 `VIBLY_DEPLOY_VIBLY_CONSOLE_CMD`。
 
-plan 输出会展示每个项目的 build 命令和解析后的 deploy 命令。内建 profile 如果缺少环境变量，也会直接提示具体变量名，例如 `GCP_VIBLY_SITE_BUCKET`，不会静默跳过。
+plan 输出会展示每个项目的 build 命令和解析后的 deploy 命令。内建 profile 如果缺少环境变量，也会直接提示具体变量名，例如 `GCP_PROJECT_ID` 或 `GCP_REGION`，不会静默跳过。
 
 每次运行都会生成 `reports/deploy-<timestamp>.json` 报告。
 
@@ -119,7 +118,7 @@ set -a
 source templates/deploy/gcp.env.example
 set +a
 pnpm deploy:gcp:plan
-pnpm deploy:gcp -- --only=vibly-coordinator,vibly-console,vibly-site
+pnpm deploy:gcp -- --only=vibly-coordinator,vibly-console
 
 # npm 预览 / 发布
 set -a
