@@ -167,7 +167,7 @@ set -a
 source templates/deploy/npm-publish.env.example
 set +a
 pnpm deploy:npm:plan
-pnpm deploy:npm -- --only=concord,vibly-client,vibly-coordinator-http-contract
+pnpm deploy:npm
 ```
 
 For a stricter production run, combine `--phase=full --require-deploy-hook` so every selected project must have either a built-in profile command or an explicit `VIBLY_DEPLOY_<PROJECT_ID>_CMD`.
@@ -177,6 +177,7 @@ For a stricter production run, combine `--phase=full --require-deploy-hook` so e
 - `vibly-indexer` is included in the deploy planner, but it is not a serverless service. A correct hosted deployment must still run its Docker Compose stack or an equivalent Postgres + SubQuery topology.
 - `vibly-coordinator` is also not fully serverless in practice. The app process can run on Cloud Run, but `STORAGE_MODE=postgres` and an external Postgres database are mandatory in production. Coordinator startup runs migrations against that database.
 - Public `Lumen` and `Monolith` environments do not need a separately deployed local payment chain. `Lumen` uses Paseo RPCs for relay-side transfers; `Monolith` uses Polkadot mainnet RPCs. The extra payment chain only exists in local E2E / manual Get VIB labs.
+- `pnpm deploy:npm` now defaults to the actual npm-publishable projects only: `concord`, `vibly-client`, and `vibly-coordinator-http-contract`. Pass `--only=...` if you want to override that default selection.
 
 ### Bootstrap a fresh indexer VM
 

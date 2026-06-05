@@ -64,6 +64,11 @@ interface GitInfo {
 const ROOT = path.resolve(import.meta.dirname, "..");
 const REPORT_DIR = path.join(ROOT, "reports");
 const REPO_ROOT = path.resolve(ROOT, "..");
+const NPM_PROFILE_DEFAULT_PROJECTS = new Set([
+  "concord",
+  "vibly-client",
+  "vibly-coordinator-http-contract",
+]);
 
 const PROJECTS: ProjectDefinition[] = [
   {
@@ -132,7 +137,7 @@ async function main(): Promise<void> {
   }
 
   const selected = PROJECTS.filter((project) => {
-    if (options.only.size > 0 && !options.only.has(project.id)) return false;
+    if (!isProjectSelected(project.id, options)) return false;
     if (options.skip.has(project.id)) return false;
     return true;
   });
@@ -323,6 +328,12 @@ function parseArgs(argv: string[]): Options {
   }
 
   return options;
+}
+
+function isProjectSelected(projectId: string, options: Options): boolean {
+  if (options.only.size > 0) return options.only.has(projectId);
+  if (options.profile === "npm") return NPM_PROFILE_DEFAULT_PROJECTS.has(projectId);
+  return true;
 }
 
 function splitCsv(value: string): string[] {
@@ -612,6 +623,7 @@ function printProjectList(): void {
     const build = project.buildCommands.length > 0 ? project.buildCommands.join(" && ") : "(none)";
     console.log(`[deploy] ${project.id} | ${project.label} | ${path.relative(REPO_ROOT, project.repoPath)} | build=${build}`);
   }
+  console.log(`[deploy] npm-profile-defaults=${Array.from(NPM_PROFILE_DEFAULT_PROJECTS).join(",")}`);
 }
 
 async function writeReport(results: ProjectExecutionResult[], options: Options): Promise<string> {
@@ -658,6 +670,7 @@ function printHelpAndExit(): never {
 Options:
   --phase=plan|build|deploy|full   Execution phase (default: plan)
   --profile=custom|gcp|npm         Built-in deploy template profile (default: custom)
+                                   npm defaults to concord,vibly-client,vibly-coordinator-http-contract unless --only is set
   --target=<name>                  Deployment target label (default: production)
   --only=a,b,c                     Only include these project ids
   --skip=a,b,c                     Skip these project ids

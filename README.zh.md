@@ -140,7 +140,7 @@ set -a
 source templates/deploy/npm-publish.env.example
 set +a
 pnpm deploy:npm:plan
-pnpm deploy:npm -- --only=concord,vibly-client,vibly-coordinator-http-contract
+pnpm deploy:npm
 ```
 
 生产发布时建议组合使用 `--phase=full --require-deploy-hook`，确保每个选中项目都有内建模板命令或显式的 `VIBLY_DEPLOY_<PROJECT_ID>_CMD`。
@@ -150,6 +150,7 @@ pnpm deploy:npm -- --only=concord,vibly-client,vibly-coordinator-http-contract
 - `vibly-indexer` 虽然已纳入 deploy planner，但它并不是 serverless 服务。正确的线上部署仍然需要拉起它的 Docker Compose 栈，或者等价的 Postgres + SubQuery 拓扑。
 - `vibly-coordinator` 实际上也不是“纯无服务”。应用进程可以跑在 Cloud Run 上，但生产环境必须使用 `STORAGE_MODE=postgres` 并连接外部 Postgres；Coordinator 启动时会自行跑迁移。
 - 公网 `Lumen` 和 `Monolith` 不需要单独再部署一个本地 payment chain。`Lumen` 直接使用 Paseo RPC 处理 Get VIB 的 relay 侧转账，`Monolith` 直接使用 Polkadot 主网 RPC。本地 E2E / 手动 Get VIB 联调时额外启的 payment chain，只属于实验室环境。
+- `pnpm deploy:npm` 现在默认只处理真正会发布到 npm 的项目：`concord`、`vibly-client`、`vibly-coordinator-http-contract`。如果你要覆盖这个默认集合，再显式传 `--only=...`。
 
 ### 初始化一台新的 indexer VM
 
