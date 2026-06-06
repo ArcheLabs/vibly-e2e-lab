@@ -125,6 +125,10 @@ plan 输出会展示每个项目的 build 命令和解析后的 deploy 命令。
 - [templates/deploy/npm-publish.env.example](/home/libingjiang47/vibly-e2e-lab/templates/deploy/npm-publish.env.example)
 - [templates/deploy/bootstrap-vibly-indexer-vm.sh](/home/libingjiang47/vibly-e2e-lab/templates/deploy/bootstrap-vibly-indexer-vm.sh)
 
+如果要部署生产 Coordinator，还需要准备 `vibly-coordinator` 仓库里的 env yaml：
+
+- [../vibly-coordinator/templates/cloud-run.env.yaml.example](/home/libingjiang47/vibly-coordinator/templates/cloud-run.env.yaml.example)
+
 示例：
 
 ```bash
@@ -143,15 +147,26 @@ pnpm deploy:npm:plan
 pnpm deploy:npm
 ```
 
+内建 GCP 的 Coordinator 部署现在强制要求这两个显式输入：
+
+- `GCP_VIBLY_COORDINATOR_ENV_FILE`
+- `GCP_VIBLY_COORDINATOR_CLOUDSQL_INSTANCE`
+
+这意味着 `STORAGE_MODE=postgres`、`DATABASE_URL` 等生产数据库配置必须放进
+Coordinator 的 env yaml，而 Cloud SQL 挂载也会作为一等部署变量传入，不再藏在
+`GCP_VIBLY_COORDINATOR_FLAGS` 里。
+
 生产发布时建议组合使用 `--phase=full --require-deploy-hook`，确保每个选中项目都有内建模板命令或显式的 `VIBLY_DEPLOY_<PROJECT_ID>_CMD`。
 
 ### 生产说明
 
 - `vibly-indexer` 虽然已纳入 deploy planner，但它并不是 serverless 服务。正确的线上部署仍然需要拉起它的 Docker Compose 栈，或者等价的 Postgres + SubQuery 拓扑。
 - `vibly-coordinator` 实际上也不是“纯无服务”。应用进程可以跑在 Cloud Run 上，但生产环境必须使用 `STORAGE_MODE=postgres` 并连接外部 Postgres；Coordinator 启动时会自行跑迁移。
+- 内建 GCP deploy profile 现在会显式校验这件事：如果 `GCP_VIBLY_COORDINATOR_ENV_FILE` 没有指向存在的 Coordinator env yaml，或者 `GCP_VIBLY_COORDINATOR_CLOUDSQL_INSTANCE` 未设置，就会直接失败。
 - 公网 `Lumen` 和 `Monolith` 不需要单独再部署一个本地 payment chain。`Lumen` 直接使用 Paseo RPC 处理 Get VIB 的 relay 侧转账，`Monolith` 直接使用 Polkadot 主网 RPC。本地 E2E / 手动 Get VIB 联调时额外启的 payment chain，只属于实验室环境。
 - `pnpm deploy:npm` 现在默认只处理真正会发布到 npm 的项目：`concord`、`vibly-client`、`vibly-coordinator-http-contract`。如果你要覆盖这个默认集合，再显式传 `--only=...`。
-- 内建 npm profile 现在优先使用 Access Token。设置 `NPM_TOKEN` 或 `NODE_AUTH_TOKEN` 即可；脚本会自动把 `NPM_TOKEN` 映射成 `NODE_AUTH_TOKEN`，不再默认设计 OTP 流程。
+- 内建 npm profile 现在优先使用 Access Token。设置 `NPM_TOKEN` 或 `NODE_AUTH_TOKEN` 即可；脚本会自动把 `NPM_TOKEN` 映射成 `NODE_AUTH_TOKEN`，并临时生成 `.npmrc`，不再默认设计 OTP 流程。
+- npm profile 现在也会更早失败并给出明确提示：先检查 `npm whoami`，对于单包发布还会先检查该版本是否已经存在，再决定是否执行 `pnpm publish`。
 
 ### 初始化一台新的 indexer VM
 

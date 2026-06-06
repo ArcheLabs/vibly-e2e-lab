@@ -152,6 +152,11 @@ Template env files live here:
 - [templates/deploy/npm-publish.env.example](/home/libingjiang47/vibly-e2e-lab/templates/deploy/npm-publish.env.example)
 - [templates/deploy/bootstrap-vibly-indexer-vm.sh](/home/libingjiang47/vibly-e2e-lab/templates/deploy/bootstrap-vibly-indexer-vm.sh)
 
+For Coordinator production deploys, also prepare the env yaml that lives in the
+`vibly-coordinator` repo:
+
+- [../vibly-coordinator/templates/cloud-run.env.yaml.example](/home/libingjiang47/vibly-coordinator/templates/cloud-run.env.yaml.example)
+
 Examples:
 
 ```bash
@@ -170,15 +175,26 @@ pnpm deploy:npm:plan
 pnpm deploy:npm
 ```
 
+The built-in GCP coordinator deploy now requires these explicit inputs:
+
+- `GCP_VIBLY_COORDINATOR_ENV_FILE`
+- `GCP_VIBLY_COORDINATOR_CLOUDSQL_INSTANCE`
+
+That means production DB settings such as `STORAGE_MODE=postgres` and `DATABASE_URL`
+must live in the Coordinator env yaml, while the Cloud SQL attachment is passed as a
+first-class deploy variable instead of being hidden inside `GCP_VIBLY_COORDINATOR_FLAGS`.
+
 For a stricter production run, combine `--phase=full --require-deploy-hook` so every selected project must have either a built-in profile command or an explicit `VIBLY_DEPLOY_<PROJECT_ID>_CMD`.
 
 ### Production notes
 
 - `vibly-indexer` is included in the deploy planner, but it is not a serverless service. A correct hosted deployment must still run its Docker Compose stack or an equivalent Postgres + SubQuery topology.
 - `vibly-coordinator` is also not fully serverless in practice. The app process can run on Cloud Run, but `STORAGE_MODE=postgres` and an external Postgres database are mandatory in production. Coordinator startup runs migrations against that database.
+- The built-in GCP deploy profile now enforces that requirement explicitly: it will fail unless `GCP_VIBLY_COORDINATOR_ENV_FILE` points at an existing Coordinator env yaml and `GCP_VIBLY_COORDINATOR_CLOUDSQL_INSTANCE` is set.
 - Public `Lumen` and `Monolith` environments do not need a separately deployed local payment chain. `Lumen` uses Paseo RPCs for relay-side transfers; `Monolith` uses Polkadot mainnet RPCs. The extra payment chain only exists in local E2E / manual Get VIB labs.
 - `pnpm deploy:npm` now defaults to the actual npm-publishable projects only: `concord`, `vibly-client`, and `vibly-coordinator-http-contract`. Pass `--only=...` if you want to override that default selection.
-- The built-in npm profile is now Access Token-first. Set `NPM_TOKEN` or `NODE_AUTH_TOKEN`; the deploy script maps `NPM_TOKEN` into `NODE_AUTH_TOKEN` automatically and no longer expects an OTP field.
+- The built-in npm profile is now Access Token-first. Set `NPM_TOKEN` or `NODE_AUTH_TOKEN`; the deploy script maps `NPM_TOKEN` into `NODE_AUTH_TOKEN`, generates a temporary `.npmrc`, and no longer expects an OTP field.
+- The npm profile now fails earlier with clearer messages: it checks `npm whoami` first, and for single-package publishes it also rejects already-published versions before running `pnpm publish`.
 
 ### Bootstrap a fresh indexer VM
 

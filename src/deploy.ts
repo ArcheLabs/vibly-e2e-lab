@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
@@ -234,24 +235,55 @@ function runShellCommand(command: string, cwd: string, projectId: string, option
   console.log(`${prefix} (${projectId}) ${command}`);
   if (options.dryRun) return;
 
+  const baseEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_AUTH_TOKEN: process.env.NODE_AUTH_TOKEN ?? process.env.NPM_TOKEN,
+    VIBLY_DEPLOY_PROJECT: projectId,
+    VIBLY_DEPLOY_TARGET: options.target,
+    VIBLY_DEPLOY_ROOT: REPO_ROOT,
+    VIBLY_DEPLOY_GIT_BRANCH: git.branch,
+    VIBLY_DEPLOY_GIT_COMMIT: git.commit,
+    VIBLY_DEPLOY_GIT_DIRTY: git.dirty ? "true" : "false",
+    VIBLY_DEPLOY_REPO_PATH: cwd,
+  };
+  const { env, cleanup } = options.profile === "npm" ? createTemporaryNpmAuthEnv(baseEnv) : { env: baseEnv, cleanup: () => {} };
+
   const child = spawnSync("bash", ["-lc", command], {
     cwd,
     stdio: "inherit",
-    env: {
-      ...process.env,
-      NODE_AUTH_TOKEN: process.env.NODE_AUTH_TOKEN ?? process.env.NPM_TOKEN,
-      VIBLY_DEPLOY_PROJECT: projectId,
-      VIBLY_DEPLOY_TARGET: options.target,
-      VIBLY_DEPLOY_ROOT: REPO_ROOT,
-      VIBLY_DEPLOY_GIT_BRANCH: git.branch,
-      VIBLY_DEPLOY_GIT_COMMIT: git.commit,
-      VIBLY_DEPLOY_GIT_DIRTY: git.dirty ? "true" : "false",
-      VIBLY_DEPLOY_REPO_PATH: cwd,
-    },
+    env,
   });
+  cleanup();
   if (child.status !== 0) {
     throw new Error(`Command failed for ${projectId}: ${command}`);
   }
+}
+
+function createTemporaryNpmAuthEnv(baseEnv: NodeJS.ProcessEnv): { env: NodeJS.ProcessEnv; cleanup: () => void } {
+  const token = baseEnv.NODE_AUTH_TOKEN?.trim() || baseEnv.NPM_TOKEN?.trim();
+  if (!token) return { env: baseEnv, cleanup: () => {} };
+
+  const tempDir = mkdtempSync(path.join(tmpdir(), "vibly-npm-auth-"));
+  const npmrcPath = path.join(tempDir, ".npmrc");
+  writeFileSync(
+    npmrcPath,
+    [
+      `//registry.npmjs.org/:_authToken=${token}`,
+      "registry=https://registry.npmjs.org/",
+      "always-auth=true",
+      "",
+    ].join("\n"),
+    { mode: 0o600 },
+  );
+
+  return {
+    env: {
+      ...baseEnv,
+      NODE_AUTH_TOKEN: token,
+      NPM_CONFIG_USERCONFIG: npmrcPath,
+    },
+    cleanup: () => rmSync(tempDir, { recursive: true, force: true }),
+  };
 }
 
 function parseArgs(argv: string[]): Options {
@@ -548,7 +580,25 @@ function resolveGcpDeployCommand(projectId: string, git?: GitInfo): Omit<DeployC
     }
     case "vibly-coordinator": {
       const service = process.env.GCP_VIBLY_COORDINATOR_SERVICE?.trim() || "vibly-coordinator";
-      return cloudRun(service, "GCP_VIBLY_COORDINATOR_FLAGS");
+      const envFile = process.env.GCP_VIBLY_COORDINATOR_ENV_FILE?.trim();
+      const cloudSqlInstance = process.env.GCP_VIBLY_COORDINATOR_CLOUDSQL_INSTANCE?.trim();
+      const missingEnv = [...missingRunEnv];
+      if (!envFile) missingEnv.push("GCP_VIBLY_COORDINATOR_ENV_FILE");
+      if (!cloudSqlInstance) missingEnv.push("GCP_VIBLY_COORDINATOR_CLOUDSQL_INSTANCE");
+      const envFilePath = envFile
+        ? path.isAbsolute(envFile)
+          ? envFile
+          : path.resolve(path.join(REPO_ROOT, "vibly-coordinator"), envFile)
+        : undefined;
+      if (envFilePath && !existsSync(envFilePath)) {
+        missingEnv.push(`existing GCP_VIBLY_COORDINATOR_ENV_FILE path (${envFilePath})`);
+      }
+      if (missingEnv.length > 0) return { source: "gcp", missingEnv };
+      return {
+        command: `gcloud run deploy ${shellQuote(service)} --source . --region ${shellQuote(region!)} --project ${shellQuote(project!)} ${allowUnauth} --env-vars-file ${shellQuote(envFilePath!)} --add-cloudsql-instances ${shellQuote(cloudSqlInstance!)}${flags("GCP_VIBLY_COORDINATOR_FLAGS")}`,
+        source: "gcp",
+        missingEnv: [],
+      };
     }
     case "vibly-console": {
       const service = process.env.GCP_VIBLY_CONSOLE_SERVICE?.trim() || "vibly-console";
@@ -569,23 +619,28 @@ function resolveNpmDeployCommand(projectId: string): Omit<DeployCommandResolutio
       missingEnv: ["NODE_AUTH_TOKEN or NPM_TOKEN"],
     };
   }
+  const authPreflight = "npm whoami >/dev/null 2>&1 || { echo '[deploy] npm authentication failed. Set NODE_AUTH_TOKEN or NPM_TOKEN for the publish scope.' >&2; exit 1; }";
+  const singlePackageVersionPreflight =
+    "PKG_NAME=$(node -p \"require('./package.json').name\") && " +
+    "PKG_VERSION=$(node -p \"require('./package.json').version\") && " +
+    "npm view \"$PKG_NAME@$PKG_VERSION\" version >/dev/null 2>&1 && { echo \"[deploy] $PKG_NAME@$PKG_VERSION is already published. Bump package.json version before publishing again.\" >&2; exit 1; } || true";
 
   switch (projectId) {
     case "concord":
       return {
-        command: `pnpm -r --filter '@vibly-ai/concord-*' publish --access ${shellQuote(access)} --tag ${shellQuote(tag)} --no-git-checks`,
+        command: `${authPreflight} && pnpm -r --filter '@vibly-ai/concord-*' publish --access ${shellQuote(access)} --tag ${shellQuote(tag)} --no-git-checks`,
         source: "npm",
         missingEnv: [],
       };
     case "vibly-client":
       return {
-        command: `pnpm publish --access ${shellQuote(access)} --tag ${shellQuote(tag)} --no-git-checks`,
+        command: `${authPreflight} && ${singlePackageVersionPreflight} && pnpm publish --access ${shellQuote(access)} --tag ${shellQuote(tag)} --no-git-checks`,
         source: "npm",
         missingEnv: [],
       };
     case "vibly-coordinator-http-contract":
       return {
-        command: `pnpm publish --access ${shellQuote(access)} --tag ${shellQuote(tag)} --no-git-checks`,
+        command: `${authPreflight} && ${singlePackageVersionPreflight} && pnpm publish --access ${shellQuote(access)} --tag ${shellQuote(tag)} --no-git-checks`,
         source: "npm",
         missingEnv: [],
       };

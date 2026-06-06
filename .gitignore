@@ -18,3 +18,4 @@ traces/
 *.db-wal
 
 agent/
+*.env
