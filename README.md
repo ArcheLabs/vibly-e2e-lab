@@ -39,6 +39,31 @@ pnpm dev:get-vib-console
 # If the lab runs on a remote server and you SSH-forward local 3002 -> remote 3001:
 VIBLY_E2E_PUBLIC_CONSOLE_PORT=3002 pnpm dev:get-vib-console
 
+# Manual Get VIB labs default to a production Console server
+# (`next build && next start`) so SSH-forwarded browsers do not hit Next HMR
+# WebSocket failures. Use this only when you need hot reload while editing UI.
+VIBLY_E2E_CONSOLE_MODE=dev pnpm dev:get-vib-console
+
+# Production-like Get VIB Console lab for Lumen/Paseo.
+# Reads ../vibly-coordinator/cloud-run.env.yaml and
+# ../vibly-coordinator/network-manifest.production.json, starts a local
+# Coordinator + Console, and does not start a local payment chain.
+# By default this is conversion-only: it connects to Paseo, but disables
+# Vibly claim/balance features so it will not use production Lumen RPC.
+pnpm dev:get-vib-console:paseo
+
+# Same SSH-forwarding shape as above:
+VIBLY_E2E_PUBLIC_CONSOLE_PORT=3002 pnpm dev:get-vib-console:paseo
+
+# To test claim/balance against a local Vibly chain, opt in explicitly.
+# A loopback RPC URL starts and initializes a local vibly-solo-node.
+VIBLY_E2E_VIBLY_RPC_URLS=ws://127.0.0.1:9944 pnpm dev:get-vib-console:paseo
+
+# To attach to an already-running local Vibly chain instead:
+VIBLY_E2E_EXTERNAL_VIBLY_CHAIN=true \
+VIBLY_E2E_VIBLY_RPC_URLS=ws://127.0.0.1:9944 \
+pnpm dev:get-vib-console:paseo
+
 # Cross-repo deployment planner / orchestrator
 pnpm deploy:all
 pnpm deploy:build
@@ -301,7 +326,15 @@ When `VIBLY_E2E_MOCK_STAKE` is unset, the runner also enables the real stake pat
 | `VIBLY_E2E_SKIP_SSE_TIMING` | `false` | Skip the SSE timing probe |
 | `VIBLY_E2E_PUBLIC_CONSOLE_PORT` | `VIBLY_E2E_CONSOLE_PORT` | Browser-facing forwarded port for manual Console labs, e.g. local `3002` forwarding remote `3001` |
 | `VIBLY_E2E_PUBLIC_CONSOLE_URL` | derived from port | Full browser-facing Console URL for SSH/proxy setups; overrides `VIBLY_E2E_PUBLIC_CONSOLE_PORT` |
+| `VIBLY_E2E_CONSOLE_MODE` | `production` for manual Get VIB labs, `dev` elsewhere | Use `production` to avoid Next dev HMR WebSocket traffic over SSH forwards; use `dev` for hot reload |
 | `GET_VIB_ROOT_UPLOAD_INTERVAL_MS` | `120000` in Get VIB local labs | Local Get VIB claim-root upload cadence. Set to `0` to disable automatic uploads. |
+| `VIBLY_E2E_COORDINATOR_ENV_FILE` | `../vibly-coordinator/cloud-run.env.yaml` | Production-like Coordinator env yaml used by `dev:get-vib-console:paseo` |
+| `VIBLY_E2E_NETWORK_MANIFEST_FILE` | `../vibly-coordinator/network-manifest.production.json` | Network manifest source used by `dev:get-vib-console:paseo`; the lab rewrites `coordinatorUrls` to the local Coordinator |
+| `VIBLY_E2E_VIBLY_RPC_URLS` | empty | Optional comma-separated Vibly chain RPC URLs for `dev:get-vib-console:paseo`; when empty, the lab is conversion-only and disables Vibly claim/balance features instead of using production Lumen RPC. A loopback URL starts a local Vibly chain unless `VIBLY_E2E_EXTERNAL_VIBLY_CHAIN=true` |
+| `VIBLY_E2E_EXTERNAL_VIBLY_CHAIN` | `false` | Attach to an already-running local Vibly chain instead of starting one when `VIBLY_E2E_VIBLY_RPC_URLS` points at loopback |
+| `VIBLY_E2E_PASEO_START_BLOCK` | finalized head minus lookback | Explicit relay watcher start block for `dev:get-vib-console:paseo` |
+| `VIBLY_E2E_PASEO_LOOKBACK_BLOCKS` | `20` | Number of finalized Paseo blocks to scan backwards on startup when no explicit start block is provided |
+| `VIBLY_E2E_PASEO_WATCHER` | `true` | Set to `false` to disable the Paseo deposit watcher loop |
 
 ### LLM (semi-autonomous mode)
 
@@ -391,6 +424,7 @@ knowledge/         Seed knowledge entries (literature index, Goldbach background
 | `pnpm e2e:get-vib` | Get VIB flow smoke: quote/order/finalize/manifest/summary/proof/records, with optional chain claim when chain RPC is configured |
 | `pnpm e2e:get-vib:polkadot-local` | Local Polkadot relay + local chain Get VIB flow: relay deposit observation/finalize + on-chain claim verification |
 | `pnpm dev:get-vib-console` | Manual Get VIB Console lab: starts local Vibly/payment chains, Coordinator, and Console; keeps them alive for browser testing; does not run Playwright or agents |
+| `pnpm dev:get-vib-console:paseo` | Production-like Manual Get VIB Console lab: starts local Coordinator/Console with a Paseo-backed manifest and no local payment chain |
 | `pnpm deploy:all` | Cross-repo deployment planner/orchestrator. Default phase is `plan` |
 | `pnpm deploy:build` | Cross-repo build orchestration across all registered repos |
 | `pnpm deploy:gcp:plan` | Preview built-in Google Cloud deploy hooks |

@@ -6,8 +6,10 @@ import { assertPortAvailable } from "./lifecycle/ports.js";
 import { startSoloNode, stopSoloNode, type SoloNodeHandle } from "./lifecycle/soloNode.js";
 import { localNetworkProfile, publicConsoleNetworkProfiles, serverCoordinatorNetworkProfiles } from "./lifecycle/networkProfiles.js";
 import {
+  consoleLaunchArgs,
+  consoleLaunchMode,
   consoleStartTimeoutMs,
-  resetConsoleDevCache,
+  prepareConsoleLaunch,
   waitForHttpWithChild,
   withConsoleDevEnv,
 } from "./lifecycle/consoleDev.js";
@@ -174,9 +176,8 @@ async function startConsole(input: {
     portEnv: "VIBLY_E2E_CONSOLE_PORT",
   });
   const internalOrigin = `http://127.0.0.1:${CONSOLE_PORT}`;
-  await resetConsoleDevCache(ROOT);
-  const child = spawn("pnpm", ["--dir", path.resolve(ROOT, "../vibly-console"), "exec", "next", "dev", "--webpack", "-p", String(CONSOLE_PORT)], {
-    env: withConsoleDevEnv({
+  const mode = consoleLaunchMode("production");
+  const consoleEnv = withConsoleDevEnv({
       ...process.env,
       COORDINATOR_URL,
       NEXT_PUBLIC_COORDINATOR_URL: COORDINATOR_URL,
@@ -193,7 +194,10 @@ async function startConsole(input: {
       NEXT_PUBLIC_VIBLY_NETWORK_PROFILES: input.profilesJson,
       VIBLY_COORDINATOR_NETWORK_PROFILES: input.coordinatorProfilesJson,
       PORT: String(CONSOLE_PORT),
-    }),
+  });
+  await prepareConsoleLaunch(ROOT, consoleEnv, mode);
+  const child = spawn("pnpm", consoleLaunchArgs(ROOT, CONSOLE_PORT, mode), {
+    env: consoleEnv,
     stdio: "pipe",
   });
   pipeChild("console", child);

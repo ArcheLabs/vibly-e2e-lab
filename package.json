@@ -18,6 +18,7 @@
     "e2e:get-vib": "tsx --env-file=.env src/get-vib.ts",
     "e2e:get-vib:polkadot-local": "tsx --env-file=.env src/get-vib-polkadot-local.ts",
     "dev:get-vib-console": "tsx --env-file=.env src/get-vib-console-manual.ts",
+    "dev:get-vib-console:paseo": "tsx --env-file=.env src/get-vib-paseo-console.ts",
     "deploy:all": "tsx --env-file=.env src/deploy.ts",
     "deploy:build": "tsx --env-file=.env src/deploy.ts --phase=build",
     "deploy:gcp:plan": "tsx --env-file=.env src/deploy.ts --phase=plan --profile=gcp",
