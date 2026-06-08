@@ -95,9 +95,11 @@ Recommended production topology:
 The built-in `--profile=gcp` now covers two common VM flows for `vibly-chain`:
 
 - `GCP_VIBLY_CHAIN_DEPLOY_MODE=upload`: build locally, upload the binary, restart `systemd`
-- `GCP_VIBLY_CHAIN_DEPLOY_MODE=remote-build`: ssh into the VM, build there, then restart `systemd`
+- `GCP_VIBLY_CHAIN_DEPLOY_MODE=remote-build`: ssh into the VM, clone/update the chain repo if needed, build there, then restart `systemd`
 
-For repeatable production rollouts, local build + artifact upload is usually the better default because it is faster and easier to verify. Remote build is still useful for first-time provisioning or when the target host ABI/toolchain must exactly match the build output.
+For repeatable production rollouts, local build + artifact upload is usually faster. Use remote build when the target host ABI/toolchain must exactly match the build output, such as when the local and VM `glibc` versions differ. Remote build uses `GCP_VIBLY_CHAIN_REPO_URL` when set, otherwise the local repo's `origin` URL.
+
+When `remote-build` is selected, the deploy planner skips the local `cargo build` by default because the local binary is not used. Set `GCP_VIBLY_CHAIN_LOCAL_PREBUILD=true` if you still want a local compile check before SSH deployment.
 
 Managed project ids:
 

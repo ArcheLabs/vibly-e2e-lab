@@ -134,7 +134,7 @@ plan 输出会展示每个项目的 build 命令和解析后的 deploy 命令。
 ```bash
 # GCP 预览 / 部署
 set -a
-source templates/deploy/gcp.env.example
+source .gcp.env
 set +a
 pnpm deploy:gcp:plan
 pnpm deploy:gcp -- --only=vibly-chain,vibly-indexer,vibly-coordinator,vibly-console

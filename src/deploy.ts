@@ -60,6 +60,7 @@ interface GitInfo {
   branch: string;
   commit: string;
   dirty: boolean;
+  remoteUrl?: string;
 }
 
 const ROOT = path.resolve(import.meta.dirname, "..");
@@ -171,6 +172,7 @@ async function deployProject(project: ProjectDefinition, options: Options): Prom
   ensureRepo(project.repoPath);
   const git = readGitInfo(project.repoPath);
   const deploy = resolveDeployCommand(project, options, git);
+  const buildCommands = resolveBuildCommands(project);
 
   if (options.phase !== "plan" && git.dirty && !options.allowDirty) {
     throw new Error(`${project.id} has uncommitted changes. Re-run with --allow-dirty if this is intentional.`);
@@ -183,7 +185,7 @@ async function deployProject(project: ProjectDefinition, options: Options): Prom
     branch: git.branch,
     commit: git.commit,
     dirty: git.dirty,
-    buildCommands: [...project.buildCommands],
+    buildCommands,
     deployEnvVar: deploy.envVar,
     deploySource: deploy.source,
     deployCommand: deploy.command,
@@ -199,12 +201,12 @@ async function deployProject(project: ProjectDefinition, options: Options): Prom
   console.log(`[deploy] ref=${git.branch}@${git.commit}${git.dirty ? " dirty" : ""}`);
 
   if (options.phase === "plan") {
-    printProjectPlan(project, deploy);
+    printProjectPlan(buildCommands, deploy);
     return result;
   }
 
   if (options.phase === "build" || options.phase === "full") {
-    for (const command of project.buildCommands) {
+    for (const command of buildCommands) {
       runShellCommand(command, project.repoPath, project.id, options, git);
       result.buildRan = true;
     }
@@ -228,6 +230,17 @@ async function deployProject(project: ProjectDefinition, options: Options): Prom
 
   result.status = "succeeded";
   return result;
+}
+
+function resolveBuildCommands(project: ProjectDefinition): string[] {
+  if (
+    project.id === "vibly-chain" &&
+    process.env.GCP_VIBLY_CHAIN_DEPLOY_MODE?.trim() === "remote-build" &&
+    process.env.GCP_VIBLY_CHAIN_LOCAL_PREBUILD !== "true"
+  ) {
+    return [];
+  }
+  return [...project.buildCommands];
 }
 
 function runShellCommand(command: string, cwd: string, projectId: string, options: Options, git: GitInfo): void {
@@ -386,7 +399,8 @@ function readGitInfo(repoPath: string): GitInfo {
   const branch = runGit(repoPath, ["rev-parse", "--abbrev-ref", "HEAD"]);
   const commit = runGit(repoPath, ["rev-parse", "--short", "HEAD"]);
   const dirty = runGit(repoPath, ["status", "--porcelain"]).length > 0;
-  return { branch, commit, dirty };
+  const remoteUrl = runGitOptional(repoPath, ["config", "--get", "remote.origin.url"]);
+  return { branch, commit, dirty, remoteUrl };
 }
 
 function runGit(repoPath: string, args: string[]): string {
@@ -398,6 +412,14 @@ function runGit(repoPath: string, args: string[]): string {
     throw new Error(`git ${args.join(" ")} failed in ${repoPath}: ${child.stderr || child.stdout}`);
   }
   return child.stdout.trim();
+}
+
+function runGitOptional(repoPath: string, args: string[]): string | undefined {
+  const child = spawnSync("git", args, {
+    cwd: repoPath,
+    encoding: "utf8",
+  });
+  return child.status === 0 && child.stdout.trim() ? child.stdout.trim() : undefined;
 }
 
 function failedResult(project: ProjectDefinition, options: Options, error: unknown): ProjectExecutionResult {
@@ -415,7 +437,7 @@ function failedResult(project: ProjectDefinition, options: Options, error: unkno
     branch: git.branch,
     commit: git.commit,
     dirty: git.dirty,
-    buildCommands: [...project.buildCommands],
+    buildCommands: resolveBuildCommands(project),
     deployEnvVar: deploy.envVar,
     deploySource: deploy.source,
     deployCommand: deploy.command,
@@ -509,16 +531,37 @@ function resolveGcpDeployCommand(projectId: string, git?: GitInfo): Omit<DeployC
       const stagingPath = process.env.GCP_VIBLY_CHAIN_REMOTE_STAGING_PATH?.trim() || "/tmp/vibly-solo-node";
       const localBin = process.env.GCP_VIBLY_CHAIN_BINARY_PATH?.trim() || "./target/release/vibly-solo-node";
       const remoteDir = process.env.GCP_VIBLY_CHAIN_REMOTE_DIR?.trim() || "/opt/vibly/vibly-chain";
+      const repoUrl = process.env.GCP_VIBLY_CHAIN_REPO_URL?.trim() || git?.remoteUrl;
       if (mode === "remote-build") {
+        if (!repoUrl) {
+          return {
+            source: "gcp",
+            missingEnv: ["GCP_VIBLY_CHAIN_REPO_URL or git remote origin"],
+          };
+        }
+        const branch = git?.branch && git.branch !== "HEAD" ? git.branch : "main";
+        const remoteParent = path.posix.dirname(remoteDir);
         return cloudVm(
           vm,
           zone,
           ["GCP_VIBLY_CHAIN_VM", "GCP_VIBLY_CHAIN_ZONE"],
           [
+            `sudo mkdir -p ${shellQuote(remoteParent)}`,
+            `sudo chown -R "$(id -u)":"$(id -g)" ${shellQuote(remoteParent)}`,
+            [
+              `if [ ! -d ${shellQuote(`${remoteDir}/.git`)} ]; then`,
+              `  if [ -d ${shellQuote(remoteDir)} ] && [ "$(ls -A ${shellQuote(remoteDir)} 2>/dev/null)" ]; then`,
+              `    echo ${shellQuote(`[deploy] Remote chain directory exists but is not an empty git checkout: ${remoteDir}`)} >&2;`,
+              "    exit 1;",
+              "  fi;",
+              `  rm -rf ${shellQuote(remoteDir)};`,
+              `  git clone ${shellQuote(repoUrl)} ${shellQuote(remoteDir)};`,
+              "fi",
+            ].join(" "),
             `cd ${shellQuote(remoteDir)}`,
             "git fetch --all --tags",
-            `git checkout ${shellQuote(git?.branch ?? "main")}`,
-            "git pull --ff-only",
+            `git checkout ${shellQuote(branch)} || git checkout -B ${shellQuote(branch)} ${shellQuote(`origin/${branch}`)}`,
+            `git pull --ff-only origin ${shellQuote(branch)}`,
             "cargo build --release -p vibly-solo-node",
             `sudo install -m 755 target/release/vibly-solo-node ${shellQuote(remoteBin)}`,
             `sudo systemctl restart ${shellQuote(service)}`,
@@ -594,8 +637,9 @@ function resolveGcpDeployCommand(projectId: string, git?: GitInfo): Omit<DeployC
         missingEnv.push(`existing GCP_VIBLY_COORDINATOR_ENV_FILE path (${envFilePath})`);
       }
       if (missingEnv.length > 0) return { source: "gcp", missingEnv };
+      
       return {
-        command: `gcloud run deploy ${shellQuote(service)} --source . --region ${shellQuote(region!)} --project ${shellQuote(project!)} ${allowUnauth} --env-vars-file ${shellQuote(envFilePath!)} --add-cloudsql-instances ${shellQuote(cloudSqlInstance!)}${flags("GCP_VIBLY_COORDINATOR_FLAGS")}`,
+        command: `gcloud run deploy ${shellQuote(service)} --source ${shellQuote(REPO_ROOT)} --region ${shellQuote(region!)} --project ${shellQuote(project!)} ${allowUnauth} --env-vars-file ${shellQuote(envFilePath!)} --add-cloudsql-instances ${shellQuote(cloudSqlInstance!)}${flags("GCP_VIBLY_COORDINATOR_FLAGS")}`,
         source: "gcp",
         missingEnv: [],
       };
@@ -664,8 +708,8 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
-function printProjectPlan(project: ProjectDefinition, deploy: DeployCommandResolution): void {
-  const build = project.buildCommands.length > 0 ? project.buildCommands.join(" && ") : "(none)";
+function printProjectPlan(buildCommands: string[], deploy: DeployCommandResolution): void {
+  const build = buildCommands.length > 0 ? buildCommands.join(" && ") : "(none)";
   console.log(`[deploy] build=${build}`);
   if (deploy.command) {
     console.log(`[deploy] deploy=${deploy.source ?? "custom"} ${deploy.command}`);
