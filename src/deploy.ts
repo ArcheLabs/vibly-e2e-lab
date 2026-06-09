@@ -603,7 +603,15 @@ function resolveGcpDeployCommand(projectId: string, git?: GitInfo): Omit<DeployC
       const endpoint = process.env.GCP_VIBLY_INDEXER_ENDPOINT?.trim() || "ws://127.0.0.1:9944";
       const chainId = process.env.GCP_VIBLY_INDEXER_CHAIN_ID?.trim() || "substrate:vibly-solo";
       const startBlock = process.env.GCP_VIBLY_INDEXER_START_BLOCK?.trim() || "1";
-      const composeEnv = `ENDPOINT=${shellQuote(endpoint)} CHAIN_ID=${shellQuote(chainId)} START_BLOCK=${shellQuote(startBlock)}`;
+      const genesisChainId = process.env.GCP_VIBLY_INDEXER_GENESIS_CHAIN_ID?.trim();
+      const buildEnvVars = [
+        `ENDPOINT=${shellQuote(endpoint)}`,
+        `CHAIN_ID=${shellQuote(chainId)}`,
+        `START_BLOCK=${shellQuote(startBlock)}`,
+        genesisChainId ? `SUBQL_GENESIS_CHAIN_ID=${shellQuote(genesisChainId)}` : "",
+      ].filter(Boolean);
+      const buildEnv = buildEnvVars.join(" ");
+      const composeEnv = buildEnv;
       const steps = [`cd ${shellQuote(remoteDir)}`];
       if (mode === "remote-build") {
         steps.push(
@@ -611,7 +619,7 @@ function resolveGcpDeployCommand(projectId: string, git?: GitInfo): Omit<DeployC
           `git checkout ${shellQuote(git?.branch ?? "main")}`,
           "git pull --ff-only",
           "npm ci",
-          "npm run build",
+          `${buildEnv} npm run build`,
         );
       }
       steps.push(
