@@ -240,6 +240,13 @@ function resolveBuildCommands(project: ProjectDefinition): string[] {
   ) {
     return [];
   }
+  if (
+    project.id === "vibly-indexer" &&
+    (process.env.GCP_VIBLY_INDEXER_DEPLOY_MODE?.trim() ?? "remote-build") === "remote-build" &&
+    process.env.GCP_VIBLY_INDEXER_LOCAL_PREBUILD !== "true"
+  ) {
+    return [];
+  }
   return [...project.buildCommands];
 }
 
