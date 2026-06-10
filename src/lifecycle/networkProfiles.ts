@@ -13,7 +13,7 @@ export interface E2eNetworkProfile {
 }
 
 const PASEO_PAYMENT_RPC_URLS = [
-  "wss://rpc.ibp.network/paseo",
+  "wss://paseo-rpc.n.dwellir.com",
   "wss://paseo.dotters.network",
   "wss://paseo-rpc.dwellir.com",
 ];
