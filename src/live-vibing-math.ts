@@ -333,6 +333,11 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
     "known-problems.md",
     "existing-resources.md",
     "literature-index-empty.md",
+    "research-method.md",
+    "review-rubric.md",
+    "failure-archive.md",
+    "artifact-templates.md",
+    "research-taxonomy.md",
   ];
 
   const orgName = process.env.VIBLY_E2E_ORG_NAME ?? (IS_LUMEN_PROFILE ? "Lumen VibMath" : "Live Vibing Math");
