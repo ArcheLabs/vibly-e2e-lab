@@ -55,6 +55,27 @@ export interface ChainSeedInput {
    * Defaults to false when sharedIdentityId is present.
    */
   registerIdentity?: boolean;
+
+  /**
+   * Pre-computed agent ref hash. If unset, derived from agentId.
+   */
+  agentRef?: string;
+
+  /**
+   * Per-agent signer URI (instead of using rootSignerUri for all agents).
+   */
+  agentSignerUri?: string;
+
+  /**
+   * Funding source address (for receipt / logging only).
+   */
+  fundingAddress?: string;
+
+  /**
+   * If true and the indexer already shows an active ledger for this agent,
+   * skip the bond step.
+   */
+  skipBondIfActive?: boolean;
 }
 
 export interface ChainSeedReceipt {
@@ -70,9 +91,10 @@ export interface ChainSeedReceipt {
 export async function seedChainAgent(input: ChainSeedInput): Promise<ChainSeedReceipt> {
   const rootSignerUri = input.rootSignerUri ?? "//Alice";
   const bondAmount = input.bondAmount ?? "100";
+  const agentSignerUri = input.agentSignerUri ?? rootSignerUri;
   const sharedSignerOpts = [
     "--rpc-url", input.chainRpcUrl,
-    "--signer-uri", rootSignerUri,
+    "--signer-uri", agentSignerUri,
     "--chain-id", input.chainId,
     "--json",
   ];
@@ -106,13 +128,13 @@ export async function seedChainAgent(input: ChainSeedInput): Promise<ChainSeedRe
   }
 
   // ── Step 2: Register agent on chain ──────────────────────────────────────
-  // Derive a deterministic ContentRef hash from the agentId string.
-  const agentRefHex = "0x" + createHash("sha256").update(`vibly-e2e-agent:${input.agentId}`).digest("hex");
-  console.log(`[chain-seed] Registering chain agent for ${input.agentId} (agentRef=${agentRefHex.slice(0, 12)}…)…`);
+  // Use pre-computed agentRef if provided, otherwise derive from agentId.
+  const agentRefValue = input.agentRef ?? `hash:0x${createHash("sha256").update(`vibly-e2e-agent:${input.agentId}`).digest("hex")}`;
+  console.log(`[chain-seed] Registering chain agent for ${input.agentId} (agentRef=${agentRefValue.slice(0, 18)}…)…`);
   const registerReceipt = await spawnCliJson<{ agentId?: string }>([
     "agent", "register-chain",
     "--identity-id", identityId,
-    "--agent-ref", `hash:${agentRefHex}`,
+    "--agent-ref", agentRefValue,
     ...sharedSignerOpts,
   ]);
   if (!registerReceipt.agentId) {
@@ -121,29 +143,74 @@ export async function seedChainAgent(input: ChainSeedInput): Promise<ChainSeedRe
   const chainAgentId = registerReceipt.agentId;
   console.log(`[chain-seed] Chain agent registered: chainAgentId=${chainAgentId}`);
 
-  // ── Step 3: Bond stake ────────────────────────────────────────────────────
-  console.log(`[chain-seed] Bonding ${bondAmount} for agent ${input.agentId}…`);
-  const bondReceipt = await spawnCliJson<{ txHash: string }>([
-    "agent", "stake", "bond",
-    "--identity-id", identityId,
-    "--agent-id", chainAgentId,
-    "--amount", bondAmount,
-    ...sharedSignerOpts,
-  ]);
-  console.log(`[chain-seed] Bond tx submitted: txHash=${bondReceipt.txHash}`);
+  // ── Step 3: Bond stake (skip if already active and skipBondIfActive is set) ─
+  let bondTxHash = "";
+  let indexerLedger: IndexerLedger;
 
-  // ── Step 4: Wait for indexer to reflect the active ledger ─────────────────
-  console.log(`[chain-seed] Waiting for indexer ledger (chainAgentId=${chainAgentId.slice(0, 12)}…)…`);
-  const indexerLedger = await waitForIndexerActiveLedger(input.graphqlUrl, chainAgentId, 120_000);
-  console.log(`[chain-seed] Indexer ledger confirmed active for ${input.agentId}`);
+  if (input.skipBondIfActive) {
+    // Check if ledger is already active before bonding
+    const existingLedger = await tryQueryIndexerLedger(input.graphqlUrl, chainAgentId);
+    if (existingLedger && existingLedger.status === "active" && BigInt(existingLedger.activeAmount) >= BigInt(bondAmount)) {
+      console.log(`[chain-seed] Skipping bond for ${input.agentId}: already active with ${existingLedger.activeAmount}`);
+      indexerLedger = existingLedger;
+      bondTxHash = "skipped";
+    } else {
+      // Bond is needed
+      console.log(`[chain-seed] Bonding ${bondAmount} for agent ${input.agentId}…`);
+      const bondReceipt = await spawnCliJson<{ txHash: string }>([
+        "agent", "stake", "bond",
+        "--identity-id", identityId,
+        "--agent-id", chainAgentId,
+        "--amount", bondAmount,
+        ...sharedSignerOpts,
+      ]);
+      console.log(`[chain-seed] Bond tx submitted: txHash=${bondReceipt.txHash}`);
+      bondTxHash = bondReceipt.txHash;
+
+      console.log(`[chain-seed] Waiting for indexer ledger (chainAgentId=${chainAgentId.slice(0, 12)}…)…`);
+      indexerLedger = await waitForIndexerActiveLedger(input.graphqlUrl, chainAgentId, 120_000);
+      console.log(`[chain-seed] Indexer ledger confirmed active for ${input.agentId}`);
+    }
+  } else {
+    console.log(`[chain-seed] Bonding ${bondAmount} for agent ${input.agentId}…`);
+    const bondReceipt = await spawnCliJson<{ txHash: string }>([
+      "agent", "stake", "bond",
+      "--identity-id", identityId,
+      "--agent-id", chainAgentId,
+      "--amount", bondAmount,
+      ...sharedSignerOpts,
+    ]);
+    console.log(`[chain-seed] Bond tx submitted: txHash=${bondReceipt.txHash}`);
+    bondTxHash = bondReceipt.txHash;
+
+    console.log(`[chain-seed] Waiting for indexer ledger (chainAgentId=${chainAgentId.slice(0, 12)}…)…`);
+    indexerLedger = await waitForIndexerActiveLedger(input.graphqlUrl, chainAgentId, 120_000);
+    console.log(`[chain-seed] Indexer ledger confirmed active for ${input.agentId}`);
+  }
 
   return {
     agentId: input.agentId,
     identityId,
     chainAgentId,
-    bondTxHash: bondReceipt.txHash,
+    bondTxHash,
     indexerLedger,
   };
+}
+
+// ── Query helpers ─────────────────────────────────────────────────────────────
+
+/**
+ * Try to query the indexer ledger for an agent. Returns undefined if not found.
+ */
+async function tryQueryIndexerLedger(
+  graphqlUrl: string,
+  chainAgentId: string,
+): Promise<IndexerLedger | undefined> {
+  try {
+    return await queryIndexerLedger(graphqlUrl, chainAgentId);
+  } catch {
+    return undefined;
+  }
 }
 
 // ── Wait helpers ──────────────────────────────────────────────────────────────

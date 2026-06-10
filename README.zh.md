@@ -254,20 +254,53 @@ VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live pnpm e2e:live-llm:get-vi
 测试网默认使用已存在 / 预先质押的 agent 身份；如需显式提供链上绑定，可设置 `VIBLY_E2E_AGENT_CHAIN_MAP` JSON。
 `pnpm e2e:live-llm`、`pnpm e2e:live-llm:resume` 和 `pnpm e2e:live-llm:testnet` 默认会在成功后保留 Coordinator、Console 和 agent daemon 进程，并打印 Console URL。agent daemon 会继续运行并监听新的任务/义务；查看结束后按 Ctrl+C，会执行清理。需要自动退出时使用 `pnpm e2e:live-llm:ci`。
 
-### Lumen VibMath live agent 启动命令
+### Lumen identity-first 启动流程
 
-使用以下命令在 Lumen 测试网上启动 VibMath / Goldbach Program live-agent 场景：
+Lumen VibMath 使用 identity-first 启动流程。脚本不会直接启动 agents，而是先确认本地身份缓存存在，并且链上资金充足。
+
+初始化链上身份：
+
+```bash
+pnpm e2e:vibmath:lumen:identity:init
+```
+
+该命令会输出充值地址：
+
+```text
+Funding address: 5...
+Identity ID: ...
+```
+
+由真人向该地址转入足够 VIB 后，执行：
+
+```bash
+pnpm e2e:vibmath:lumen:preflight
+```
+
+补齐本地 agent key/cache：
+
+```bash
+pnpm e2e:vibmath:lumen:agents:prepare
+```
+
+启动完整 Lumen VibMath 流程：
 
 ```bash
 pnpm e2e:vibmath:lumen
 ```
 
-该模式复用 `scenarios/vibing-math`，并默认连接外部 Lumen 服务：
+启动前脚本会自动：
 
-* 外部 Coordinator
-* 外部 Vibly chain RPC
-* 外部 Indexer GraphQL
-* 本地 `vibly-client` agent daemon
+1. 加载本地 identity cache；
+2. 从链上 / indexer 同步 identity 和 agent 状态；
+3. 对比本地 cache 与链上状态；
+4. 如果存在差异，输出 diff 并保存到 `last-diff.json`；
+5. 如果本地 agent 数量不足，生成缺失 agent；
+6. 注册缺失的 chain agent；
+7. bond 缺失的 stake；
+8. 启动 VibMath agent daemons。
+
+脚本不会输出私钥、mnemonic、seed phrase、API token 或 root signer。
 
 必需环境变量：
 

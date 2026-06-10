@@ -279,18 +279,51 @@ Starts multiple real `vibly-client daemon start` processes with `daemon.llmE2E=t
 
 ### Lumen VibMath live agent bootstrap
 
-Use this command to bootstrap the VibMath / Goldbach Program live-agent scenario against the Lumen testnet:
+The Lumen VibMath flow is identity-first. It does not start agents until a local identity cache exists and the funding address has enough balance.
+
+Initialize the identity:
+
+```bash
+pnpm e2e:vibmath:lumen:identity:init
+```
+
+The command prints a funding address:
+
+```text
+Funding address: 5...
+Identity ID: ...
+```
+
+Send enough VIB to that address, then run:
+
+```bash
+pnpm e2e:vibmath:lumen:preflight
+```
+
+Prepare missing local agent keys:
+
+```bash
+pnpm e2e:vibmath:lumen:agents:prepare
+```
+
+Start the full Lumen VibMath flow:
 
 ```bash
 pnpm e2e:vibmath:lumen
 ```
 
-This mode reuses `scenarios/vibing-math` and assumes external Lumen services:
+Before starting, the script will:
 
-* external Coordinator
-* external Vibly chain RPC
-* external Indexer GraphQL
-* local `vibly-client` agent daemons
+1. load the local identity cache;
+2. sync identity and agent state from chain/indexer;
+3. compare local cache with chain state;
+4. print and persist a diff if they disagree;
+5. generate missing local agents;
+6. register missing chain agents;
+7. bond missing stake;
+8. start the VibMath agent daemons.
+
+The script never prints private keys or seed phrases.
 
 Required environment variables:
 
@@ -329,6 +362,12 @@ To resume a checkpointed run:
 
 ```bash
 VIBLY_E2E_RUN_NAME=my-lumen-run pnpm e2e:vibmath:lumen:resume
+```
+
+Sync identity and agent state from chain/indexer:
+
+```bash
+pnpm e2e:vibmath:lumen:identity:sync
 ```
 
 ## Real-chain pipeline

@@ -224,6 +224,13 @@ async function main(): Promise<void> {
       await saveLiveRunState(DATA_DIR, state);
     }
 
+    // ── Lumen identity-first preflight ────────────────────────────────────
+    if (IS_LUMEN_PROFILE && process.env.VIBLY_E2E_SKIP_LUMEN_PREFLIGHT !== "true") {
+      const { runLumenPreflight } = await import("./lumenPreflight.js");
+      const preflight = await runLumenPreflight();
+      console.log(`[e2e:live] Lumen preflight passed: ${preflight.agents.agents.length} agents cached`);
+    }
+
     state = await ensureSeeded(state);
     await checkpoint(state, "after-seed", requestedPause);
     state = markMilestone(state, "after-seed");
