@@ -47,13 +47,20 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 const SCENARIO = path.join(ROOT, "scenarios", "vibing-math");
 const REPORT_DIR = path.join(ROOT, "reports");
 const DATA_DIR = path.join(ROOT, "data");
+const PROFILE = process.env.VIBLY_E2E_PROFILE ?? "default";
+const IS_LUMEN_PROFILE = PROFILE === "lumen";
 const COORDINATOR_PORT = Number(process.env.VIBLY_E2E_COORDINATOR_PORT ?? "8787");
 const CONSOLE_PORT = Number(process.env.VIBLY_E2E_CONSOLE_PORT ?? "3001");
 const PAYMENT_CHAIN_RPC_PORT = Number(process.env.VIBLY_E2E_PAYMENT_CHAIN_RPC_PORT ?? "9945");
-const COORDINATOR_URL = process.env.COORDINATOR_URL ?? `http://127.0.0.1:${COORDINATOR_PORT}`;
+const COORDINATOR_URL =
+  process.env.COORDINATOR_URL ??
+  process.env.LUMEN_COORDINATOR_URL ??
+  `http://127.0.0.1:${COORDINATOR_PORT}`;
 const COORDINATOR_START_TIMEOUT_MS = Number(process.env.VIBLY_E2E_COORDINATOR_START_TIMEOUT_MS ?? "120000");
 const API_TOKEN = process.env.COORDINATOR_API_TOKEN ?? "dev-token";
-const CHAIN_ID = process.env.VIBLY_E2E_CHAIN_ID ?? "substrate:vibly-solo";
+const CHAIN_ID =
+  process.env.VIBLY_E2E_CHAIN_ID ??
+  (IS_LUMEN_PROFILE ? "substrate:lumen" : "substrate:vibly-solo");
 const USE_REAL_STAKE = resolveUseRealStake("e2e:live-llm");
 const ENABLE_GET_VIB_LOCAL = process.env.VIBLY_E2E_ENABLE_GET_VIB_LOCAL === "true";
 const DEFAULT_GET_VIB_DEPOSIT_ADDRESS = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
@@ -62,6 +69,7 @@ const TESTNET_SEED = process.env.VIBLY_E2E_TESTNET_SEED === "true";
 const RESUME_RUN = process.env.VIBLY_E2E_RESUME === "true";
 const RESET_RUN = process.env.VIBLY_E2E_RESET_RUN === "true";
 const HAS_EXPLICIT_RUN_NAME = Boolean(process.env.VIBLY_E2E_RUN_NAME);
+const AGENT_DUTY_COMMAND = process.env.VIBLY_E2E_AGENT_DUTY_COMMAND;
 const KEEP_ALIVE =
   process.env.VIBLY_E2E_KEEP_ALIVE === "true" ||
   process.env.VIBLY_E2E_KEEP_ALIVE_ON_SUCCESS === "true" ||
@@ -114,8 +122,47 @@ async function main(): Promise<void> {
     throw new Error("VIBLY_E2E_RUN_NAME is required when using e2e:live-llm:resume.");
   }
 
+  if (AGENT_DUTY_COMMAND && !HAS_EXPLICIT_RUN_NAME) {
+    throw new Error("VIBLY_E2E_RUN_NAME is required when using VIBLY_E2E_AGENT_DUTY_COMMAND.");
+  }
+
   const runName = sanitizeRunName(process.env.VIBLY_E2E_RUN_NAME ?? defaultRunName());
   const runRoot = liveRunDir(DATA_DIR, runName);
+
+  // ── Agent duty command (pause/resume) ───────────────────────────────────
+  if (AGENT_DUTY_COMMAND) {
+    const existingState = await loadLiveRunState(DATA_DIR, runName);
+    if (!existingState) {
+      throw new Error(`Live run "${runName}" was not found for agent duty command.`);
+    }
+
+    if (AGENT_DUTY_COMMAND === "pause") {
+      const reason = `manual:${runName}:pause`;
+      await pauseAgents(existingState, reason);
+      await saveLiveRunState(DATA_DIR, {
+        ...existingState,
+        status: "paused",
+        pausedReason: reason,
+      });
+      console.log(`[e2e:live] manually paused agents for run=${runName}`);
+      return;
+    }
+
+    if (AGENT_DUTY_COMMAND === "resume") {
+      await resumeAgents(existingState);
+      await saveLiveRunState(DATA_DIR, {
+        ...existingState,
+        status: "running",
+        pausedAt: undefined,
+        pausedReason: undefined,
+      });
+      console.log(`[e2e:live] manually resumed agents for run=${runName}`);
+      return;
+    }
+
+    throw new Error(`Unsupported VIBLY_E2E_AGENT_DUTY_COMMAND=${AGENT_DUTY_COMMAND}`);
+  }
+
   if (RESET_RUN) {
     await rm(runRoot, { recursive: true, force: true });
   }
@@ -281,14 +328,27 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
     "literature-index-empty.md",
   ];
 
+  const orgName = process.env.VIBLY_E2E_ORG_NAME ?? (IS_LUMEN_PROFILE ? "Lumen VibMath" : "Live Vibing Math");
+  const orgDescription =
+    process.env.VIBLY_E2E_ORG_DESCRIPTION ??
+    (IS_LUMEN_PROFILE
+      ? "Lumen testnet VibMath live agent organization"
+      : "Persistent live LLM multi-agent E2E organization");
+  const projectName =
+    process.env.VIBLY_E2E_PROJECT_NAME ??
+    (IS_LUMEN_PROFILE ? "Lumen Goldbach Program" : "Live Goldbach Program");
+  const projectSlugPrefix =
+    process.env.VIBLY_E2E_PROJECT_SLUG_PREFIX ??
+    (IS_LUMEN_PROFILE ? "lumen-goldbach" : "live-goldbach");
+
   const guardianPrincipal = await post("/principals", {
     kind: "service",
     displayName: `live-guardian-${state.runName}`,
   }).then((body) => unwrapKey<Json>(body, "principal"));
   const guardian = String(guardianPrincipal.id);
   const orgId = await action("CreateOrganization", guardian, {
-    name: "Live Vibing Math",
-    description: "Persistent live LLM multi-agent E2E organization",
+    name: orgName,
+    description: orgDescription,
   }).then((result) => result.aggregateRef.id);
   await action("UpdateHandbook", guardian, {
     organizationId: orgId,
@@ -302,8 +362,8 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
     },
   });
   const project = await post("/projects", {
-    slug: `live-goldbach-${state.runName}-${Date.now()}`,
-    name: "Live Goldbach Program",
+    slug: `${projectSlugPrefix}-${state.runName}-${Date.now()}`,
+    name: projectName,
     description: projectHandbook,
     sponsorPrincipalId: guardian,
     metadata: { organizationId: orgId, scenario: "live-llm-vibing-math", runName: state.runName },
@@ -409,11 +469,28 @@ async function resolveChainBinding(agent: AgentConfig, guardian: string): Promis
   }
 
   if (TESTNET_SEED) {
-    const chainRpcUrl = process.env.VIBLY_E2E_CHAIN_RPC_URL ?? process.env.SUBSTRATE_RPC_URL;
-    const graphqlUrl = process.env.VIBLY_E2E_INDEXER_URL ?? process.env.SUBSTRATE_INDEXER_URL;
-    if (!chainRpcUrl || !graphqlUrl) {
-      throw new Error("VIBLY_E2E_TESTNET_SEED=true requires VIBLY_E2E_CHAIN_RPC_URL/SUBSTRATE_RPC_URL and VIBLY_E2E_INDEXER_URL/SUBSTRATE_INDEXER_URL.");
+    // If agent chain map already has both identityId and chainAgentId, skip seeding.
+    const mapped = getAgentChainMap()[agent.id] ?? getAgentChainMap()[agent.principalId];
+    if (mapped?.identityId && mapped?.chainAgentId) {
+      console.log(`[e2e:live] Skipping chain seed for ${agent.id}: already mapped identityId=${mapped.identityId} chainAgentId=${mapped.chainAgentId}`);
+      return mapped;
     }
+
+    const chainRpcUrl =
+      process.env.VIBLY_E2E_CHAIN_RPC_URL ??
+      process.env.LUMEN_CHAIN_RPC_URL ??
+      process.env.SUBSTRATE_RPC_URL;
+    const graphqlUrl =
+      process.env.VIBLY_E2E_INDEXER_URL ??
+      process.env.LUMEN_INDEXER_GRAPHQL_URL ??
+      process.env.SUBSTRATE_INDEXER_URL;
+    if (!chainRpcUrl || !graphqlUrl) {
+      throw new Error(
+        "VIBLY_E2E_TESTNET_SEED=true requires VIBLY_E2E_CHAIN_RPC_URL/LUMEN_CHAIN_RPC_URL/SUBSTRATE_RPC_URL " +
+        "and VIBLY_E2E_INDEXER_URL/LUMEN_INDEXER_GRAPHQL_URL/SUBSTRATE_INDEXER_URL.",
+      );
+    }
+    const sharedIdentityId = mapped?.identityId ? mapped.identityId : getSharedIdentityId(agent);
     const receipt = await seedChainAgent({
       agentId: agent.id,
       coordinatorUrl: COORDINATOR_URL,
@@ -423,6 +500,8 @@ async function resolveChainBinding(agent: AgentConfig, guardian: string): Promis
       chainId: CHAIN_ID,
       bondAmount: process.env.VIBLY_E2E_TESTNET_BOND_AMOUNT ?? "100",
       rootSignerUri: process.env.VIBLY_E2E_ROOT_SIGNER_URI,
+      sharedIdentityId,
+      registerIdentity: shouldRegisterIdentity(agent, sharedIdentityId),
     });
     return { identityId: receipt.identityId, chainAgentId: receipt.chainAgentId, receipt };
   }
@@ -443,6 +522,17 @@ function getAgentChainMap(): Record<string, ChainBinding> {
   const raw = process.env.VIBLY_E2E_AGENT_CHAIN_MAP;
   if (!raw) return {};
   return JSON.parse(raw) as Record<string, ChainBinding>;
+}
+
+function getSharedIdentityId(agent: AgentConfig): string | undefined {
+  const mapped = getAgentChainMap()[agent.id] ?? getAgentChainMap()[agent.principalId];
+  if (mapped?.identityId && !mapped.chainAgentId) return mapped.identityId;
+  return process.env.VIBLY_E2E_SHARED_IDENTITY_ID;
+}
+
+function shouldRegisterIdentity(agent: AgentConfig, sharedIdentityId: string | undefined): boolean {
+  if (sharedIdentityId) return false;
+  return process.env.VIBLY_E2E_REGISTER_IDENTITY !== "false";
 }
 
 async function checkpoint(state: LiveRunState, boundary: PauseBoundary, requestedPause?: string): Promise<void> {
@@ -976,6 +1066,9 @@ function fakeChild(): ChildProcessWithoutNullStreams {
 
 function defaultRunName(): string {
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/u, "").replace("T", "-");
+  if (IS_LUMEN_PROFILE) {
+    return `lumen-vibmath-${stamp}`;
+  }
   return `live-vibing-math-${stamp}`;
 }
 
