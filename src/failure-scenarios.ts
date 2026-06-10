@@ -117,7 +117,7 @@ async function setupOrg(
   mechanismOverrides: Json = {},
 ): Promise<OrgCtx> {
   const guardian = extractPrincipalId(
-    await apiPost(base, token, "/principals", { kind: "service", displayName: `fc-guardian-${tag}` }),
+    await apiPost(base, token, "/principals", { kind: "agent", displayName: `fc-guardian-${tag}` }),
   );
 
   const orgId = await act(base, token, guardian, "CreateOrganization", {
@@ -573,7 +573,7 @@ async function runFC5(
   try {
     const fc5P = "fc5_observer_contradiction";
     const fc5Guardian = extractPrincipalId(
-      await apiPost(base, token, "/principals", { kind: "service", displayName: "fc5-guardian" }),
+      await apiPost(base, token, "/principals", { kind: "agent", displayName: "fc5-guardian" }),
     );
 
     await act(base, token, fc5Guardian, "RegisterAgentProfile", {

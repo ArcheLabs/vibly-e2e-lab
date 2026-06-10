@@ -323,6 +323,118 @@ async function main(): Promise<void> {
 async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
   if (state.organizationId && state.projectId && state.guardianPrincipalId) return state;
 
+  // ── Attach mode ──────────────────────────────────────────────────────────
+  // Lumen E2E requires an existing human-guardian-created org/project.
+  const existingOrganizationId = process.env.VIBLY_E2E_ORGANIZATION_ID;
+  const existingProjectId = process.env.VIBLY_E2E_PROJECT_ID;
+  const skipOrganizationCreate = process.env.VIBLY_E2E_SKIP_ORGANIZATION_CREATE === "true";
+
+  const attachToExistingOrganization =
+    IS_LUMEN_PROFILE || skipOrganizationCreate;
+
+  if (attachToExistingOrganization) {
+    if (!existingOrganizationId || !existingProjectId) {
+      throw new Error(
+        "Lumen VibMath E2E requires an existing human-guardian-created organization/project.\n" +
+        "Set VIBLY_E2E_ORGANIZATION_ID and VIBLY_E2E_PROJECT_ID.\n" +
+        "Create the organization/project from Console as a human Guardian first.",
+      );
+    }
+
+    const bootstrapPrincipalId =
+      process.env.VIBLY_E2E_BOOTSTRAP_PRINCIPAL_ID ??
+      `principal_e2e_bootstrap_${sanitizeRunName(state.runName)}`;
+
+    console.log(
+      `[e2e:live] attaching run=${state.runName} org=${existingOrganizationId} project=${existingProjectId} actor=${bootstrapPrincipalId}`,
+    );
+
+    const next = {
+      ...state,
+      // legacy field name; in attach mode this is the bootstrap action actor, not necessarily a human Guardian
+      guardianPrincipalId: bootstrapPrincipalId,
+      organizationId: existingOrganizationId,
+      projectId: existingProjectId,
+      status: "running" as const,
+    };
+    await saveLiveRunState(DATA_DIR, next);
+
+    const agents = await loadYaml<{ agents: AgentConfig[] }>("agents.yaml");
+    const mechanisms = await loadYaml<{ mechanisms: MechanismConfig[] }>("mechanisms.yaml");
+    const knowledgeFiles = [
+      "project-status.md",
+      "goldbach-background.md",
+      "known-problems.md",
+      "existing-resources.md",
+      "literature-index-empty.md",
+      "research-method.md",
+      "review-rubric.md",
+      "failure-archive.md",
+      "artifact-templates.md",
+      "research-taxonomy.md",
+    ];
+
+    const chainSeedReceipts: Record<string, ChainSeedReceipt> = {};
+    for (const agent of agents.agents) {
+      const capabilities = [...new Set([...agent.roleHints, ...Object.keys(agent.skills)])];
+      const reputationScore = agent.id === "lazy-agent" ? 0.1 : 0.75;
+      const binding = await resolveChainBinding(agent, bootstrapPrincipalId);
+
+      await action("RegisterAgentProfile", bootstrapPrincipalId, {
+        principalId: agent.principalId,
+        displayName: agent.id,
+        organizationIds: [existingOrganizationId],
+        capabilities,
+        reputationScore,
+        chainId: binding.identityId && binding.chainAgentId ? CHAIN_ID : undefined,
+        identityId: binding.identityId,
+        chainAgentId: binding.chainAgentId,
+        dutyStatus: "active",
+      });
+
+      if (USE_REAL_STAKE && binding.identityId && binding.chainAgentId) {
+        await waitForCoordinatorStakeSync(COORDINATOR_URL, API_TOKEN, agent.principalId, 60_000).catch((err) => {
+          if (!EXTERNAL_COORDINATOR) throw err;
+          console.warn(`[e2e:live] stake sync not confirmed for ${agent.principalId}: ${String(err)}`);
+        });
+      }
+
+      await action("AddMember", bootstrapPrincipalId, {
+        organizationId: existingOrganizationId,
+        principalId: agent.principalId,
+        role: agent.roleHints[0] ?? "agent",
+      });
+
+      if (binding.receipt) chainSeedReceipts[agent.id] = binding.receipt;
+    }
+
+    for (const mechanism of mechanisms.mechanisms) {
+      await action("UpsertMechanism", bootstrapPrincipalId, {
+        ...mechanism,
+        id: "mechanism_vibing_math_live",
+        name: "vibing_math_live_llm_mechanism_v1",
+        organizationId: existingOrganizationId,
+        projectId: existingProjectId,
+        timeout: { durationMs: 180_000, action: "select-backup" },
+      });
+    }
+    for (const file of knowledgeFiles) {
+      await action("SeedKnowledgeEntry", bootstrapPrincipalId, {
+        organizationId: existingOrganizationId,
+        projectId: existingProjectId,
+        title: file,
+        content: await readScenarioFile(`knowledge/${file}`),
+        tags: ["initial", "goldbach", "live-llm"],
+      });
+    }
+
+    console.log(
+      `[e2e:live] attached run=${state.runName} org=${existingOrganizationId} project=${existingProjectId} chainSeed=${Object.keys(chainSeedReceipts).length}`,
+    );
+    return next;
+  }
+
+  // ── Auto-create mode (local/dev only) ────────────────────────────────────
   const agents = await loadYaml<{ agents: AgentConfig[] }>("agents.yaml");
   const mechanisms = await loadYaml<{ mechanisms: MechanismConfig[] }>("mechanisms.yaml");
   const orgHandbook = await readScenarioFile("handbooks/organization.md");
@@ -353,16 +465,17 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
     process.env.VIBLY_E2E_PROJECT_SLUG_PREFIX ??
     (IS_LUMEN_PROFILE ? "lumen-goldbach" : "live-goldbach");
 
-  const guardianPrincipal = await post("/principals", {
-    kind: "service",
-    displayName: `live-guardian-${state.runName}`,
+  // Use agent kind (not service) for the bootstrap actor
+  const bootstrapPrincipal = await post("/principals", {
+    kind: "agent",
+    displayName: `e2e-bootstrap-${state.runName}`,
   }).then((body) => unwrapKey<Json>(body, "principal"));
-  const guardian = String(guardianPrincipal.id);
-  const orgId = await action("CreateOrganization", guardian, {
+  const bootstrapActor = String(bootstrapPrincipal.id);
+  const orgId = await action("CreateOrganization", bootstrapActor, {
     name: orgName,
     description: orgDescription,
   }).then((result) => result.aggregateRef.id);
-  await action("UpdateHandbook", guardian, {
+  await action("UpdateHandbook", bootstrapActor, {
     organizationId: orgId,
     handbook: {
       mission: orgHandbook,
@@ -370,14 +483,14 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
         "Use ActionIntent for all state changes",
         "Build reusable research infrastructure before proof attempts",
       ],
-      guardianPolicy: { guardian, powers: ["pause", "veto", "request_revision"] },
+      guardianPolicy: { guardian: bootstrapActor, powers: ["pause", "veto", "request_revision"] },
     },
   });
   const project = await post("/projects", {
     slug: `${projectSlugPrefix}-${state.runName}-${Date.now()}`,
     name: projectName,
     description: projectHandbook,
-    sponsorPrincipalId: guardian,
+    sponsorPrincipalId: bootstrapActor,
     metadata: { organizationId: orgId, scenario: "live-llm-vibing-math", runName: state.runName },
   }).then((body) => unwrapKey<Json>(body, "project"));
   const projectId = String(project.id);
@@ -386,9 +499,9 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
   for (const agent of agents.agents) {
     const capabilities = [...new Set([...agent.roleHints, ...Object.keys(agent.skills)])];
     const reputationScore = agent.id === "lazy-agent" ? 0.1 : 0.75;
-    const binding = await resolveChainBinding(agent, guardian);
+    const binding = await resolveChainBinding(agent, bootstrapActor);
 
-    await action("RegisterAgentProfile", guardian, {
+    await action("RegisterAgentProfile", bootstrapActor, {
       principalId: agent.principalId,
       displayName: agent.id,
       organizationIds: [orgId],
@@ -407,7 +520,7 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
       });
     }
 
-    await action("AddMember", guardian, {
+    await action("AddMember", bootstrapActor, {
       organizationId: orgId,
       principalId: agent.principalId,
       role: agent.roleHints[0] ?? "agent",
@@ -417,7 +530,7 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
   }
 
   for (const mechanism of mechanisms.mechanisms) {
-    await action("UpsertMechanism", guardian, {
+    await action("UpsertMechanism", bootstrapActor, {
       ...mechanism,
       id: "mechanism_vibing_math_live",
       name: "vibing_math_live_llm_mechanism_v1",
@@ -427,7 +540,7 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
     });
   }
   for (const file of knowledgeFiles) {
-    await action("SeedKnowledgeEntry", guardian, {
+    await action("SeedKnowledgeEntry", bootstrapActor, {
       organizationId: orgId,
       projectId,
       title: file,
@@ -438,7 +551,7 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
 
   const next = {
     ...state,
-    guardianPrincipalId: guardian,
+    guardianPrincipalId: bootstrapActor,
     organizationId: orgId,
     projectId,
     status: "running" as const,

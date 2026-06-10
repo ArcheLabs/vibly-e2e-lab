@@ -345,7 +345,7 @@ export async function runSemiAutonomousScenario(
 
     // ── Setup isolated org ────────────────────────────────────────────────────
     const guardian = extractPrincipalId(
-      await apiPost(base, token, "/principals", { kind: "service", displayName: "sa-guardian" }),
+      await apiPost(base, token, "/principals", { kind: "agent", displayName: "sa-guardian" }),
     );
     const orgId = await act(base, token, guardian, "CreateOrganization", {
       name: "SA Vibing Math",

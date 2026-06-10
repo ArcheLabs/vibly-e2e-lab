@@ -26,6 +26,8 @@ import {
   saveIdentityPublic,
   generateIdentityKeypair,
   computeAgentRef,
+  type LumenIdentityPrivate,
+  type LumenIdentityPublic,
 } from "./lumenIdentityCache.js";
 import {
   loadAgentsPrivate,
@@ -85,17 +87,31 @@ async function initLumenIdentity(): Promise<void> {
   const cacheDir = defaultLumenCacheDir();
   const existingPrivate = await loadIdentityPrivate(cacheDir);
 
-  // If private cache already exists, print info and exit.
+  // If private cache already exists
   if (existingPrivate) {
-    console.log("[lumen:identity] Identity cache already exists.");
+    // Case 1: identityId already exists → nothing to do
+    if (existingPrivate.identity.identityId) {
+      console.log("[lumen:identity] Identity cache already exists.");
+      console.log(`[lumen:identity] Network: ${existingPrivate.network}`);
+      console.log(`[lumen:identity] Public address: ${existingPrivate.identity.publicAddress}`);
+      console.log(`[lumen:identity] Identity ID: ${existingPrivate.identity.identityId}`);
+
+      const pub = await loadIdentityPublic(cacheDir);
+      if (pub) {
+        console.log(`[lumen:identity] Last known balance: ${pub.funding.lastKnownFreeBalance}`);
+      }
+
+      console.log("");
+      console.log("[lumen:identity] Next step:");
+      console.log("  pnpm e2e:vibmath:lumen:preflight");
+      return;
+    }
+
+    // Case 2: identityId missing, status is pending_funding (or undefined)
+    // Try registering again with cached credentials (no keypair regeneration)
+    console.log("[lumen:identity] Identity cache exists but not yet registered on chain.");
     console.log(`[lumen:identity] Network: ${existingPrivate.network}`);
     console.log(`[lumen:identity] Public address: ${existingPrivate.identity.publicAddress}`);
-    if (existingPrivate.identity.identityId) {
-      console.log(`[lumen:identity] Identity ID: ${existingPrivate.identity.identityId}`);
-    } else {
-      console.log(`[lumen:identity] Status: ${existingPrivate.identity.status ?? "pending_funding"}`);
-      console.log(`[lumen:identity] Identity not yet registered on chain.`);
-    }
 
     // Print balance from public cache if available
     const pub = await loadIdentityPublic(cacheDir);
@@ -103,15 +119,70 @@ async function initLumenIdentity(): Promise<void> {
       console.log(`[lumen:identity] Last known balance: ${pub.funding.lastKnownFreeBalance}`);
     }
 
-    console.log("");
-    console.log("[lumen:identity] To re-register, remove the cache directory:");
-    console.log(`  rm -rf ${cacheDir}`);
-    console.log("");
-    console.log("[lumen:identity] Next step:");
-    if (existingPrivate.identity.identityId) {
+    console.log("[lumen:identity] Attempting to register identity on chain with cached keypair…");
+
+    try {
+      const identityId = await registerIdentityOnChain(
+        existingPrivate.identity.publicAddress,
+        existingPrivate.identity.signerUri,
+      );
+
+      // Registration succeeded — update caches
+      const now = new Date().toISOString();
+
+      // Update private cache
+      const updatedPrivate: LumenIdentityPrivate = {
+        ...existingPrivate,
+        updatedAt: now,
+        identity: {
+          ...existingPrivate.identity,
+          identityId,
+          status: "registered",
+        },
+      };
+      await saveIdentityPrivate(cacheDir, updatedPrivate);
+
+      // Update public cache
+      const existingPublic = pub ?? {
+        version: 1 as const,
+        profile: "lumen" as const,
+        network: "lumen" as const,
+        createdAt: now,
+        updatedAt: now,
+        identity: {
+          localKeyId: existingPrivate.identity.localKeyId,
+          publicAddress: existingPrivate.identity.publicAddress,
+          publicKey: existingPrivate.identity.publicKey,
+          identityId,
+        },
+        funding: {
+          requiredMinimumBalance: "1000",
+          lastKnownFreeBalance: "0",
+          lastCheckedAt: now,
+        },
+      };
+      const updatedPublic: LumenIdentityPublic = {
+        ...existingPublic,
+        updatedAt: now,
+        identity: {
+          ...existingPublic.identity,
+          identityId,
+        },
+      };
+      await saveIdentityPublic(cacheDir, updatedPublic);
+
+      console.log(`[lumen:identity] Identity registered: ID=${identityId}`);
+      console.log("");
+      console.log("Next step:");
       console.log("  pnpm e2e:vibmath:lumen:preflight");
-    } else {
-      console.log("  Send VIB to the funding address, then re-run identity:init");
+    } catch (err) {
+      // Registration failed again — keep pending_funding, print original error
+      console.warn(`[lumen:identity] Could not register identity on chain: ${String(err)}`);
+      console.warn("[lumen:identity] The funding address may still need a balance.");
+      console.warn("[lumen:identity] Identity remains pending_funding.");
+      console.warn("");
+      console.warn("Send enough VIB to the funding address, then re-run:");
+      console.warn("  pnpm e2e:vibmath:lumen:identity:init");
     }
     return;
   }

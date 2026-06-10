@@ -194,7 +194,7 @@ async function runDeterministicScenario(): Promise<Json> {
     "literature-index-empty.md",
   ];
 
-  const guardianPrincipal = await post("/principals", { kind: "service", displayName: "human-guardian" })
+  const guardianPrincipal = await post("/principals", { kind: "agent", displayName: "human-guardian" })
     .then((body) => unwrapKey<Json>(body, "principal"));
   const guardian = String(guardianPrincipal.id);
   const orgId = await action("CreateOrganization", guardian, {
