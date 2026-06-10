@@ -277,6 +277,60 @@ LLM-driven observer using an OpenAI-compatible endpoint. Skipped gracefully when
 
 Starts multiple real `vibly-client daemon start` processes with `daemon.llmE2E=true`. Each daemon reads its own inbox, calls the configured OpenAI-compatible LLM endpoint, and submits normal Coordinator `ActionIntent`s for observations, discussions, proposals, reviews, artifacts, and reward claims. The runner only seeds/resumes the scenario and waits for milestones.
 
+### Lumen VibMath live agent bootstrap
+
+Use this command to bootstrap the VibMath / Goldbach Program live-agent scenario against the Lumen testnet:
+
+```bash
+pnpm e2e:vibmath:lumen
+```
+
+This mode reuses `scenarios/vibing-math` and assumes external Lumen services:
+
+* external Coordinator
+* external Vibly chain RPC
+* external Indexer GraphQL
+* local `vibly-client` agent daemons
+
+Required environment variables:
+
+```bash
+LUMEN_COORDINATOR_URL=
+LUMEN_CHAIN_RPC_URL=
+LUMEN_INDEXER_GRAPHQL_URL=
+COORDINATOR_API_TOKEN=
+VIBLY_E2E_ROOT_SIGNER_URI=
+VIBLY_E2E_CHAIN_ID=substrate:lumen
+VIBLY_E2E_TESTNET_SEED=true
+```
+
+Optional shared identity mode:
+
+```bash
+VIBLY_E2E_SHARED_IDENTITY_ID=<identity-id>
+```
+
+When `VIBLY_E2E_SHARED_IDENTITY_ID` is set, all agents reuse the same chain identity, while each agent still registers its own chain agent and bonds independently.
+
+Pause and resume agents:
+
+```bash
+VIBLY_E2E_RUN_NAME=my-lumen-run pnpm e2e:vibmath:lumen:pause-agents
+VIBLY_E2E_RUN_NAME=my-lumen-run pnpm e2e:vibmath:lumen:resume-agents
+```
+
+To start from scratch:
+
+```bash
+VIBLY_E2E_RUN_NAME=my-lumen-run pnpm e2e:vibmath:lumen:fresh
+```
+
+To resume a checkpointed run:
+
+```bash
+VIBLY_E2E_RUN_NAME=my-lumen-run pnpm e2e:vibmath:lumen:resume
+```
+
 ## Real-chain pipeline
 
 E2E commands boot or verify the whole network profile: Coordinator, Console, Vibly chain, and a separate payment chain. Local runs fail fast if `vibly-solo-node` cannot be started; use `VIBLY_E2E_BUILD_CHAIN=true` to build it automatically.

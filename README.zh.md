@@ -254,6 +254,65 @@ VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live pnpm e2e:live-llm:get-vi
 测试网默认使用已存在 / 预先质押的 agent 身份；如需显式提供链上绑定，可设置 `VIBLY_E2E_AGENT_CHAIN_MAP` JSON。
 `pnpm e2e:live-llm`、`pnpm e2e:live-llm:resume` 和 `pnpm e2e:live-llm:testnet` 默认会在成功后保留 Coordinator、Console 和 agent daemon 进程，并打印 Console URL。agent daemon 会继续运行并监听新的任务/义务；查看结束后按 Ctrl+C，会执行清理。需要自动退出时使用 `pnpm e2e:live-llm:ci`。
 
+### Lumen VibMath live agent 启动命令
+
+使用以下命令在 Lumen 测试网上启动 VibMath / Goldbach Program live-agent 场景：
+
+```bash
+pnpm e2e:vibmath:lumen
+```
+
+该模式复用 `scenarios/vibing-math`，并默认连接外部 Lumen 服务：
+
+* 外部 Coordinator
+* 外部 Vibly chain RPC
+* 外部 Indexer GraphQL
+* 本地 `vibly-client` agent daemon
+
+必需环境变量：
+
+```bash
+LUMEN_COORDINATOR_URL=
+LUMEN_CHAIN_RPC_URL=
+LUMEN_INDEXER_GRAPHQL_URL=
+COORDINATOR_API_TOKEN=
+VIBLY_E2E_ROOT_SIGNER_URI=
+VIBLY_E2E_CHAIN_ID=substrate:lumen
+VIBLY_E2E_TESTNET_SEED=true
+```
+
+共享 identity 模式：
+
+```bash
+VIBLY_E2E_SHARED_IDENTITY_ID=<identity-id>
+```
+
+设置 `VIBLY_E2E_SHARED_IDENTITY_ID` 后，多个 agents 会复用同一个链上 identity，但每个 agent 仍会独立注册 chain agent，并独立 bond stake。
+
+暂停 agents：
+
+```bash
+VIBLY_E2E_RUN_NAME=my-lumen-run pnpm e2e:vibmath:lumen:pause-agents
+```
+
+恢复 agents：
+
+```bash
+VIBLY_E2E_RUN_NAME=my-lumen-run pnpm e2e:vibmath:lumen:resume-agents
+```
+
+重置并重新启动：
+
+```bash
+VIBLY_E2E_RUN_NAME=my-lumen-run pnpm e2e:vibmath:lumen:fresh
+```
+
+恢复 checkpoint run：
+
+```bash
+VIBLY_E2E_RUN_NAME=my-lumen-run pnpm e2e:vibmath:lumen:resume
+```
+
 ## 场景：Vibing Math
 
 测试场景位于 `scenarios/vibing-math/`：
