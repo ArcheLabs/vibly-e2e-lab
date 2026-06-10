@@ -41,6 +41,20 @@ export interface ChainSeedInput {
   bondAmount?: string;
   /** Dev account URI used as the root/owner signer (default: //Alice). */
   rootSignerUri?: string;
+
+  /**
+   * Existing identity id reused by multiple chain agents.
+   * When provided, identity registration is skipped unless registerIdentity=true
+   * and the implementation explicitly supports creating the shared identity.
+   */
+  sharedIdentityId?: string;
+
+  /**
+   * Whether to register a new identity before registering the chain agent.
+   * Defaults to true when sharedIdentityId is absent.
+   * Defaults to false when sharedIdentityId is present.
+   */
+  registerIdentity?: boolean;
 }
 
 export interface ChainSeedReceipt {
@@ -63,17 +77,33 @@ export async function seedChainAgent(input: ChainSeedInput): Promise<ChainSeedRe
     "--json",
   ];
 
-  // ── Step 1: Register identity ─────────────────────────────────────────────
-  console.log(`[chain-seed] Registering identity for agent ${input.agentId}…`);
-  const identityReceipt = await spawnCliJson<{ identityId?: string }>([
-    "agent", "identity", "register-chain",
-    ...sharedSignerOpts,
-  ]);
-  if (!identityReceipt.identityId) {
-    throw new Error(`register-identity did not return identityId for agent ${input.agentId}`);
+  // ── Step 1: Register or reuse identity ────────────────────────────────────
+  const shouldRegisterIdentity = input.registerIdentity ?? !input.sharedIdentityId;
+
+  let identityId = input.sharedIdentityId;
+
+  if (shouldRegisterIdentity) {
+    console.log(`[chain-seed] Registering identity for agent ${input.agentId}…`);
+    const identityReceipt = await spawnCliJson<{ identityId?: string }>([
+      "agent", "identity", "register-chain",
+      ...sharedSignerOpts,
+    ]);
+    if (!identityReceipt.identityId) {
+      throw new Error(`register-identity did not return identityId for agent ${input.agentId}`);
+    }
+    identityId = identityReceipt.identityId;
+    console.log(`[chain-seed] Identity registered: identityId=${identityId}`);
+  } else {
+    if (!identityId) {
+      throw new Error(`sharedIdentityId is required when registerIdentity=false for agent ${input.agentId}`);
+    }
+    console.log(`[chain-seed] Reusing shared identity for agent ${input.agentId}: identityId=${identityId}`);
   }
-  const identityId = identityReceipt.identityId;
-  console.log(`[chain-seed] Identity registered: identityId=${identityId}`);
+
+  // Assert identityId is defined before proceeding
+  if (!identityId) {
+    throw new Error(`No identityId resolved for agent ${input.agentId}`);
+  }
 
   // ── Step 2: Register agent on chain ──────────────────────────────────────
   // Derive a deterministic ContentRef hash from the agentId string.
