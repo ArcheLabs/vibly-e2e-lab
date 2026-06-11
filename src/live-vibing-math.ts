@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile, appendFile } from "node:fs/promises";
 import { networkInterfaces } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -34,14 +34,22 @@ import {
   createInitialLiveRunState,
   isPauseBoundary,
   liveRunDir,
+  liveRunStatePath,
   loadLiveRunState,
   markMilestone,
   saveLiveRunState,
   sanitizeRunName,
   shouldPauseAt,
   type LiveRunState,
+  type LiveRunFailure,
+  type LiveRunAction,
   type PauseBoundary,
 } from "./liveState.js";
+import {
+  HttpResponseError,
+  LiveActionError,
+  type LiveActionErrorContext,
+} from "./liveErrors.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const SCENARIO = path.join(ROOT, "scenarios", "vibing-math");
@@ -70,12 +78,15 @@ const RESUME_RUN = process.env.VIBLY_E2E_RESUME === "true";
 const RESET_RUN = process.env.VIBLY_E2E_RESET_RUN === "true";
 const HAS_EXPLICIT_RUN_NAME = Boolean(process.env.VIBLY_E2E_RUN_NAME);
 const AGENT_DUTY_COMMAND = process.env.VIBLY_E2E_AGENT_DUTY_COMMAND;
-const KEEP_ALIVE =
-  process.env.VIBLY_E2E_KEEP_ALIVE === "true" ||
-  process.env.VIBLY_E2E_KEEP_ALIVE_ON_SUCCESS === "true" ||
-  process.env.VIBLY_E2E_KEEP_ALIVE_ON_FAILURE === "true";
-const KEEP_ALIVE_ON_SUCCESS = KEEP_ALIVE || process.env.VIBLY_E2E_KEEP_ALIVE_ON_SUCCESS === "true";
-const KEEP_ALIVE_ON_FAILURE = KEEP_ALIVE || process.env.VIBLY_E2E_KEEP_ALIVE_ON_FAILURE === "true";
+
+// ── Keep-alive semantics (Issue 7) ───────────────────────────────────────
+// VIBLY_E2E_KEEP_ALIVE=true → keep alive on both success and failure.
+// *_ON_SUCCESS / *_ON_FAILURE → scoped.
+const KEEP_ALIVE_ALWAYS = process.env.VIBLY_E2E_KEEP_ALIVE === "true";
+const KEEP_ALIVE_ON_SUCCESS =
+  KEEP_ALIVE_ALWAYS || process.env.VIBLY_E2E_KEEP_ALIVE_ON_SUCCESS === "true";
+const KEEP_ALIVE_ON_FAILURE =
+  KEEP_ALIVE_ALWAYS || process.env.VIBLY_E2E_KEEP_ALIVE_ON_FAILURE === "true";
 
 type Json = Record<string, unknown>;
 
@@ -93,6 +104,30 @@ type ChainBinding = {
   identityId?: string;
   chainAgentId?: string;
 };
+
+// ── Lumen external mode early config check (Issue 9) ──────────────────────
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value;
+}
+
+if (IS_LUMEN_PROFILE && EXTERNAL_COORDINATOR) {
+  requireEnv("OPENAI_API_KEY");
+  if (API_TOKEN === "dev-token") {
+    throw new Error(
+      "COORDINATOR_API_TOKEN is still the default value in external Lumen mode.\n" +
+      "Set a real coordinator API token.",
+    );
+  }
+  requireEnv("LUMEN_COORDINATOR_URL");
+  requireEnv("LUMEN_CHAIN_RPC_URL");
+  requireEnv("LUMEN_INDEXER_GRAPHQL_URL");
+  requireEnv("VIBLY_E2E_ORGANIZATION_ID");
+  requireEnv("VIBLY_E2E_PROJECT_ID");
+}
 
 const children: ChildProcessWithoutNullStreams[] = [];
 let soloNodeHandle: SoloNodeHandle | undefined;
@@ -167,6 +202,7 @@ async function main(): Promise<void> {
     await rm(runRoot, { recursive: true, force: true });
   }
   await mkdir(runRoot, { recursive: true });
+  setPipeLogDir(runRoot);
   const mode = EXTERNAL_COORDINATOR ? "external" : "local";
   const existingState = await loadLiveRunState(DATA_DIR, runName);
   if (existingState?.status === "passed" && !RESUME_RUN && !RESET_RUN) {
@@ -213,6 +249,7 @@ async function main(): Promise<void> {
   let completed = false;
   let reportPath: string | undefined;
   let contentReportPath: string | undefined;
+  let failureReportPaths: { reportPath: string; readablePath: string } | undefined;
   try {
     if (process.env.VIBLY_E2E_SKIP_CONSOLE !== "true") {
       consoleProcess = await startConsole();
@@ -226,19 +263,24 @@ async function main(): Promise<void> {
 
     // ── Lumen identity-first preflight ────────────────────────────────────
     if (IS_LUMEN_PROFILE && process.env.VIBLY_E2E_SKIP_LUMEN_PREFLIGHT !== "true") {
+      state = await setPhase(state, "preflight");
       const { runLumenPreflight } = await import("./lumenPreflight.js");
       const preflight = await runLumenPreflight();
       console.log(`[e2e:live] Lumen preflight passed: ${preflight.agents.agents.length} agents cached`);
     }
 
+    state = await setPhase(state, "ensure-seeded");
     state = await ensureSeeded(state);
+    state = await setPhase(state, "after-seed");
     await checkpoint(state, "after-seed", requestedPause);
     state = markMilestone(state, "after-seed");
     await saveLiveRunState(DATA_DIR, state);
 
     const agents = await loadYaml<{ agents: AgentConfig[] }>("agents.yaml");
+    state = await setPhase(state, "start-agent-daemons");
     await startAgentDaemons(agents.agents.filter((agent) => agent.behavior.lazy !== true), state.projectId!);
 
+    state = await setPhase(state, "create-first-observation-task");
     if (!state.firstObservationTaskId) {
       state.firstObservationTaskId = await action("CreateObservationTask", state.guardianPrincipalId!, {
         organizationId: state.organizationId,
@@ -250,11 +292,13 @@ async function main(): Promise<void> {
       await saveLiveRunState(DATA_DIR, state);
     }
 
+    state = await setPhase(state, "wait-first-observation");
     await waitForObservation(state.firstObservationTaskId!);
     await checkpoint(state, "after-first-observation", requestedPause);
     state = markMilestone(state, "after-first-observation");
     await saveLiveRunState(DATA_DIR, state);
 
+    state = await setPhase(state, "wait-proposal");
     const proposal = await waitForProposal(state.organizationId!);
     const proposalId = String(proposal.id);
     state.proposalId = proposalId;
@@ -262,14 +306,17 @@ async function main(): Promise<void> {
     state = markMilestone(state, "after-proposal");
     await saveLiveRunState(DATA_DIR, state);
 
+    state = await setPhase(state, "wait-tasks");
     const tasks = await waitForTasks(state.organizationId!, proposalId);
     state.taskIds = tasks.map((task) => String(task.id));
+    state = await setPhase(state, "wait-artifacts");
     const artifacts = await waitForArtifacts(state.organizationId!, state.taskIds);
     state.artifactIds = artifacts.map((artifact) => String(artifact.id));
     await checkpoint(state, "after-artifacts", requestedPause);
     state = markMilestone(state, "after-artifacts");
     await saveLiveRunState(DATA_DIR, state);
 
+    state = await setPhase(state, "wait-knowledge-sync");
     await waitForKnowledgeSync(state.organizationId!, state.projectId!);
     await checkpoint(state, "after-knowledge-sync", requestedPause);
     state = markMilestone(state, "after-knowledge-sync");
@@ -278,6 +325,7 @@ async function main(): Promise<void> {
     state = markMilestone(state, "before-second-observation");
     await saveLiveRunState(DATA_DIR, state);
 
+    state = await setPhase(state, "create-second-observation-task");
     if (!state.secondObservationTaskId) {
       state.secondObservationTaskId = await action("CreateObservationTask", state.guardianPrincipalId!, {
         organizationId: state.organizationId,
@@ -288,8 +336,10 @@ async function main(): Promise<void> {
       }).then((result) => result.aggregateRef.id);
       await saveLiveRunState(DATA_DIR, state);
     }
+    state = await setPhase(state, "wait-second-observation");
     await waitForObservation(state.secondObservationTaskId!);
 
+    state = await setPhase(state, "build-report");
     reportPath = path.join(REPORT_DIR, `live-llm-${Date.now()}.json`);
     contentReportPath = path.join(REPORT_DIR, `live-llm-content-${Date.now()}.md`);
     state = { ...state, status: "passed" };
@@ -303,12 +353,87 @@ async function main(): Promise<void> {
     if (err instanceof PauseExit) {
       return;
     }
-    state = { ...state, status: "failed" };
-    await saveLiveRunState(DATA_DIR, state);
+
+    // ── Failure handling (Issues 1, 6) ───────────────────────────────────
+    // Reload latest state from disk and merge with in-memory state
+    const latestOnDisk = await loadLiveRunState(DATA_DIR, runName);
+
+    // Build merged state: prefer disk version for fields that may have been
+    // persisted (orgId, projectId, etc.), fall back to memory state
+    const merged = {
+      ...state,
+      ...latestOnDisk,
+      // Keep the most complete set of key identifiers
+      guardianPrincipalId: state.guardianPrincipalId ?? latestOnDisk?.guardianPrincipalId,
+      organizationId: state.organizationId ?? latestOnDisk?.organizationId,
+      projectId: state.projectId ?? latestOnDisk?.projectId,
+      completedMilestones: state.completedMilestones.length > 0
+        ? state.completedMilestones
+        : (latestOnDisk?.completedMilestones ?? []),
+      taskIds: state.taskIds.length > 0 ? state.taskIds : (latestOnDisk?.taskIds ?? []),
+      artifactIds: state.artifactIds.length > 0 ? state.artifactIds : (latestOnDisk?.artifactIds ?? []),
+    };
+
+    // Extract error context
+    let actionType: string | undefined;
+    let principalId: string | undefined;
+    let errRoute: string | undefined;
+    let httpStatus: number | undefined;
+    let responseBody: unknown;
+    let responseText: string | undefined;
+
+    if (err instanceof LiveActionError) {
+      actionType = err.context.type;
+      principalId = err.context.principalId;
+      errRoute = err.context.route;
+      httpStatus = err.context.httpStatus;
+      responseBody = err.context.responseBody;
+      responseText = err.context.responseText;
+    } else if (err instanceof HttpResponseError) {
+      errRoute = err.context.route;
+      httpStatus = err.context.status;
+      responseBody = err.context.responseBody;
+      responseText = err.context.responseText;
+    }
+
+    const failure = normalizeFailure(err, {
+      phase: state.lastPhase,
+      actionType,
+      principalId,
+      route: errRoute,
+      httpStatus,
+      responseBody,
+      responseText,
+    });
+
+    const failedState: LiveRunState = {
+      ...merged,
+      status: "failed",
+      failure,
+    };
+
+    await saveLiveRunState(DATA_DIR, failedState);
+    state = failedState;
+
+    // Write failure reports
+    failureReportPaths = await writeFailureReport(failedState, failure);
+    console.log(`[e2e:live] failed. report=${failureReportPaths.reportPath}`);
+    console.log(`[e2e:live] readable failure report=${failureReportPaths.readablePath}`);
+
     throw err;
   } finally {
-    if ((completed && KEEP_ALIVE_ON_SUCCESS) || (!completed && KEEP_ALIVE_ON_FAILURE)) {
-      printKeepAliveInfo({ state, reportPath, contentReportPath, consoleAvailable: Boolean(consoleProcess) });
+    // Determine if keep-alive applies based on fixed semantics (Issue 7)
+    const shouldKeepAlive = completed
+      ? KEEP_ALIVE_ON_SUCCESS
+      : KEEP_ALIVE_ON_FAILURE;
+
+    if (shouldKeepAlive) {
+      printKeepAliveInfo({
+        state,
+        reportPath: reportPath ?? failureReportPaths?.reportPath,
+        contentReportPath: contentReportPath ?? failureReportPaths?.readablePath,
+        consoleAvailable: Boolean(consoleProcess),
+      });
       await waitUntilInterrupted();
     }
     await stopChildren();
@@ -349,15 +474,17 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
       `[e2e:live] attaching run=${state.runName} org=${existingOrganizationId} project=${existingProjectId} actor=${bootstrapPrincipalId}`,
     );
 
-    const next = {
+    let next: LiveRunState = {
       ...state,
       // legacy field name; in attach mode this is the bootstrap action actor, not necessarily a human Guardian
       guardianPrincipalId: bootstrapPrincipalId,
       organizationId: existingOrganizationId,
       projectId: existingProjectId,
       status: "running" as const,
+      lastPhase: "attach.resolve-existing-org-project",
     };
     await saveLiveRunState(DATA_DIR, next);
+    next = await setPhase(next, "attach.register-agent-profiles");
 
     const agents = await loadYaml<{ agents: AgentConfig[] }>("agents.yaml");
     const mechanisms = await loadYaml<{ mechanisms: MechanismConfig[] }>("mechanisms.yaml");
@@ -408,6 +535,7 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
       if (binding.receipt) chainSeedReceipts[agent.id] = binding.receipt;
     }
 
+    next = await setPhase(next, "attach.upsert-mechanism");
     for (const mechanism of mechanisms.mechanisms) {
       await action("UpsertMechanism", bootstrapPrincipalId, {
         ...mechanism,
@@ -418,6 +546,7 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
         timeout: { durationMs: 180_000, action: "select-backup" },
       });
     }
+    next = await setPhase(next, "attach.seed-knowledge");
     for (const file of knowledgeFiles) {
       await action("SeedKnowledgeEntry", bootstrapPrincipalId, {
         organizationId: existingOrganizationId,
@@ -769,11 +898,17 @@ async function startAgentDaemons(agents: AgentConfig[], projectId: string): Prom
     .filter(({ child }) => child.exitCode !== null)
     .map(({ agentId, child }) => `${agentId} (exit=${String(child.exitCode)})`);
   if (failed.length > 0) {
+    const stderrParts = failed.map((id) => {
+      const agentId = id.split(" ")[0]!;
+      return `--- ${agentId} stderr ---\n${tailStderr(`live-agent:${agentId}`)}`;
+    });
     throw new Error(
       [
         `Live agent daemons exited before the run could continue: ${failed.join(", ")}.`,
         "Install vibly-client dependencies first: cd ../vibly-client && pnpm install",
-      ].join(" "),
+        "",
+        ...stderrParts,
+      ].join("\n"),
     );
   }
 }
@@ -1089,8 +1224,22 @@ async function getInbox(principalId: string, organizationId: string, projectId: 
 }
 
 async function action(type: string, principalId: string, payload: Json): Promise<{ aggregateRef: { id: string; kind: string } }> {
-  const body = await post("/action-intents", { type, principalId, payload });
-  return unwrapData<{ aggregateRef: { id: string; kind: string } }>(body);
+  // Save lastAction for failure context before making the request
+  const startedAt = new Date().toISOString();
+  try {
+    const body = await post("/action-intents", { type, principalId, payload });
+    return unwrapData<{ aggregateRef: { id: string; kind: string } }>(body);
+  } catch (err) {
+    // Wrap non-LiveActionError errors with action context
+    if (!(err instanceof LiveActionError) && !(err instanceof HttpResponseError)) {
+      throw new LiveActionError(
+        `ActionIntent failed: type=${type} principal=${principalId} status=error route=/action-intents`,
+        { type, principalId, route: "/action-intents" },
+        { cause: err },
+      );
+    }
+    throw err;
+  }
 }
 
 async function post(route: string, body: Json): Promise<Json> {
@@ -1099,14 +1248,14 @@ async function post(route: string, body: Json): Promise<Json> {
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${API_TOKEN}` },
     body: JSON.stringify(body),
   });
-  return parseResponse(route, response);
+  return parseResponse(route, response, "POST");
 }
 
 async function get<T extends Json = Json>(route: string, query?: Record<string, string | number>): Promise<T> {
   const url = new URL(`${COORDINATOR_URL}${route}`);
   for (const [key, value] of Object.entries(query ?? {})) url.searchParams.set(key, String(value));
   const response = await fetch(url, { headers: { Authorization: `Bearer ${API_TOKEN}` } });
-  return parseResponse(route, response) as Promise<T>;
+  return parseResponse(route, response, "GET") as Promise<T>;
 }
 
 async function list<T extends Json>(route: string, query?: Record<string, string | number>): Promise<T[]> {
@@ -1119,13 +1268,27 @@ async function list<T extends Json>(route: string, query?: Record<string, string
   return [];
 }
 
-async function parseResponse(route: string, response: Response): Promise<Json> {
+async function parseResponse(route: string, response: Response, method?: string): Promise<Json> {
   const text = await response.text();
-  const body = text ? JSON.parse(text) as Json : {};
-  if (!response.ok || body.ok === false) {
-    throw new Error(`${route} failed: HTTP ${response.status} ${text}`);
+  let body: Json | undefined;
+  try {
+    body = text ? JSON.parse(text) as Json : {};
+  } catch {
+    body = undefined;
   }
-  return body;
+
+  if (!response.ok || body?.ok === false) {
+    throw new HttpResponseError({
+      route,
+      method: method ?? "UNKNOWN",
+      status: response.status,
+      statusText: response.statusText,
+      responseBody: body,
+      responseText: body ? undefined : text,
+    });
+  }
+
+  return body ?? {};
 }
 
 function unwrapData<T>(body: Json): T {
@@ -1171,12 +1334,86 @@ async function readScenarioFile(relative: string): Promise<string> {
   return readFile(path.join(SCENARIO, relative), "utf8");
 }
 
+// ── Child process log rings (Issue 8) ────────────────────────────────────
+
+const LOG_RING_MAX_LINES = 200;
+
+interface LogRing {
+  name: string;
+  stdout: string[];
+  stderr: string[];
+}
+
+const logRings = new Map<string, LogRing>();
+
+function getLogRing(name: string): LogRing {
+  let ring = logRings.get(name);
+  if (!ring) {
+    ring = { name, stdout: [], stderr: [] };
+    logRings.set(name, ring);
+  }
+  return ring;
+}
+
+function appendToRing(lines: string[], ring: string[], max: number): void {
+  for (const line of lines) {
+    ring.push(line);
+    if (ring.length > max) ring.shift();
+  }
+}
+
+function tailStderr(name: string, n = 30): string {
+  const ring = logRings.get(name);
+  if (!ring || ring.stderr.length === 0) return "(no stderr)";
+  return ring.stderr.slice(-n).join("\n");
+}
+
+function dumpAllStderr(): string {
+  const parts: string[] = [];
+  for (const [name, ring] of logRings) {
+    if (ring.stderr.length > 0) {
+      parts.push(`--- ${name} stderr tail ---`);
+      parts.push(tailStderr(name, 50));
+    }
+  }
+  return parts.join("\n");
+}
+
+let pipeLogDir: string | undefined;
+
+function setPipeLogDir(dir: string): void {
+  pipeLogDir = dir;
+}
+
+async function writeLogLine(kind: "stdout" | "stderr", name: string, line: string): Promise<void> {
+  if (!pipeLogDir) return;
+  const file = path.join(pipeLogDir, `logs`, `${name}.${kind}.log`);
+  try {
+    await appendFile(file, line + "\n", "utf8");
+  } catch {
+    // best effort
+  }
+}
+
 function pipeChild(name: string, child: ChildProcessWithoutNullStreams): void {
-  child.stdout.on("data", (chunk) => {
-    if (process.env.VIBLY_E2E_VERBOSE === "true") process.stdout.write(`[${name}] ${String(chunk)}`);
+  const ring = getLogRing(name);
+  child.stdout.on("data", (chunk: Buffer) => {
+    const text = String(chunk);
+    const lines = text.split("\n").filter(Boolean);
+    appendToRing(lines, ring.stdout, LOG_RING_MAX_LINES);
+    for (const line of lines) {
+      void writeLogLine("stdout", name, line);
+    }
+    if (process.env.VIBLY_E2E_VERBOSE === "true") process.stdout.write(`[${name}] ${text}`);
   });
-  child.stderr.on("data", (chunk) => {
-    if (process.env.VIBLY_E2E_VERBOSE === "true") process.stderr.write(`[${name}] ${String(chunk)}`);
+  child.stderr.on("data", (chunk: Buffer) => {
+    const text = String(chunk);
+    const lines = text.split("\n").filter(Boolean);
+    appendToRing(lines, ring.stderr, LOG_RING_MAX_LINES);
+    for (const line of lines) {
+      void writeLogLine("stderr", name, line);
+    }
+    if (process.env.VIBLY_E2E_VERBOSE === "true") process.stderr.write(`[${name}] ${text}`);
   });
 }
 
@@ -1195,6 +1432,152 @@ function defaultRunName(): string {
     return `lumen-vibmath-${stamp}`;
   }
   return `live-vibing-math-${stamp}`;
+}
+
+// ── Phase tracking (Issue 3) ─────────────────────────────────────────────
+
+async function setPhase(state: LiveRunState, phase: string): Promise<LiveRunState> {
+  const next = { ...state, lastPhase: phase };
+  await saveLiveRunState(DATA_DIR, next);
+  console.log(`[e2e:live] phase=${phase}`);
+  return next;
+}
+
+// ── Failure helpers (Issues 1, 6) ────────────────────────────────────────
+
+function normalizeFailure(
+  err: unknown,
+  context?: { phase?: string; actionType?: string; principalId?: string; route?: string; method?: string; httpStatus?: number; responseBody?: unknown; responseText?: string },
+): LiveRunFailure {
+  const occurredAt = new Date().toISOString();
+  if (err instanceof LiveActionError) {
+    return {
+      phase: context?.phase,
+      actionType: err.context.type,
+      principalId: err.context.principalId,
+      route: err.context.route,
+      httpStatus: err.context.httpStatus,
+      responseBody: err.context.responseBody,
+      responseText: err.context.responseText,
+      message: err.message,
+      stack: err.stack,
+      causedBy: err.cause,
+      occurredAt,
+    };
+  }
+  if (err instanceof HttpResponseError) {
+    return {
+      phase: context?.phase,
+      route: err.context.route,
+      method: err.context.method,
+      httpStatus: err.context.status,
+      responseBody: err.context.responseBody,
+      responseText: err.context.responseText,
+      message: err.message,
+      stack: err.stack,
+      causedBy: err.cause,
+      occurredAt,
+    };
+  }
+  return {
+    phase: context?.phase,
+    actionType: context?.actionType,
+    principalId: context?.principalId,
+    route: context?.route,
+    httpStatus: context?.httpStatus,
+    responseBody: context?.responseBody,
+    responseText: context?.responseText,
+    message: err instanceof Error ? err.message : String(err),
+    stack: err instanceof Error ? err.stack : undefined,
+    causedBy: err instanceof Error ? err.cause : undefined,
+    occurredAt,
+  };
+}
+
+function buildFailureReportPath(runName: string, suffix: string): string {
+  return path.join(REPORT_DIR, `live-llm-failure-${runName}-${Date.now()}.${suffix}`);
+}
+
+async function writeFailureReport(
+  state: LiveRunState,
+  failure: LiveRunFailure,
+): Promise<{ reportPath: string; readablePath: string }> {
+  const reportPath = buildFailureReportPath(state.runName, "json");
+  const readablePath = buildFailureReportPath(state.runName, "md");
+
+  const report = {
+    runName: state.runName,
+    status: "failed",
+    coordinatorUrl: COORDINATOR_URL,
+    organizationId: state.organizationId,
+    projectId: state.projectId,
+    guardianPrincipalId: state.guardianPrincipalId,
+    lastPhase: state.lastPhase,
+    lastAction: state.lastAction,
+    failure: {
+      message: failure.message,
+      phase: failure.phase,
+      actionType: failure.actionType,
+      principalId: failure.principalId,
+      route: failure.route,
+      method: failure.method,
+      httpStatus: failure.httpStatus,
+      // Only include safe fields — no secrets
+      responseBody: failure.responseBody,
+    },
+  };
+
+  await writeFile(reportPath, JSON.stringify(report, null, 2) + "\n");
+
+  const md = [
+    `# Live LLM VibMath Failure Report`,
+    ``,
+    `- Run: ${state.runName}`,
+    `- Phase: ${failure.phase ?? "unknown"}`,
+    `- Action: ${failure.actionType ?? "N/A"}`,
+    `- Principal: ${failure.principalId ?? "N/A"}`,
+    failure.httpStatus ? `- HTTP: ${failure.httpStatus}` : null,
+    `- Coordinator: ${COORDINATOR_URL}`,
+    ``,
+    `## Message`,
+    ``,
+    failure.message,
+    ``,
+    failure.responseBody ? [
+      `## Response`,
+      ``,
+      "```json",
+      JSON.stringify(failure.responseBody, null, 2),
+      "```",
+    ].join("\n") : null,
+    ``,
+    failure.responseText ? [
+      `## Response Text`,
+      ``,
+      "```",
+      failure.responseText,
+      "```",
+    ].join("\n") : null,
+    ``,
+    `## State Snapshot`,
+    ``,
+    "```json",
+    JSON.stringify({
+      runName: state.runName,
+      status: state.status,
+      lastPhase: state.lastPhase,
+      lastAction: state.lastAction,
+      organizationId: state.organizationId,
+      projectId: state.projectId,
+      guardianPrincipalId: state.guardianPrincipalId,
+      completedMilestones: state.completedMilestones,
+    }, null, 2),
+    "```",
+    ``,
+  ].filter(Boolean).join("\n");
+
+  await writeFile(readablePath, md);
+  return { reportPath, readablePath };
 }
 
 function printKeepAliveInfo(input: {

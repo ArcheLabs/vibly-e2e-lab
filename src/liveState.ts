@@ -14,6 +14,29 @@ export type PauseBoundary = typeof PAUSE_BOUNDARIES[number];
 
 export type LiveRunStatus = "created" | "running" | "paused" | "passed" | "failed";
 
+export interface LiveRunAction {
+  type: string;
+  principalId: string;
+  organizationId?: string;
+  projectId?: string;
+  startedAt: string;
+}
+
+export interface LiveRunFailure {
+  phase?: string;
+  actionType?: string;
+  principalId?: string;
+  route?: string;
+  method?: string;
+  httpStatus?: number;
+  responseBody?: unknown;
+  responseText?: string;
+  message: string;
+  stack?: string;
+  causedBy?: unknown;
+  occurredAt: string;
+}
+
 export interface LiveRunState {
   version: 1;
   runName: string;
@@ -32,6 +55,9 @@ export interface LiveRunState {
   artifactIds: string[];
   pausedAt?: PauseBoundary;
   pausedReason?: string;
+  lastPhase?: string;
+  lastAction?: LiveRunAction;
+  failure?: LiveRunFailure;
 }
 
 export function createInitialLiveRunState(input: {
