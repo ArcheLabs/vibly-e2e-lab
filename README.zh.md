@@ -286,6 +286,8 @@ pnpm e2e:vibmath:lumen:agents:prepare
 启动完整 Lumen VibMath 流程：
 
 ```bash
+VIBLY_E2E_ORGANIZATION_ID=<guardian-created-org-id> \
+VIBLY_E2E_PROJECT_ID=<guardian-created-project-id> \
 pnpm e2e:vibmath:lumen
 ```
 
@@ -298,7 +300,15 @@ pnpm e2e:vibmath:lumen
 5. 如果本地 agent 数量不足，生成缺失 agent；
 6. 注册缺失的 chain agent；
 7. bond 缺失的 stake；
-8. 启动 VibMath agent daemons。
+8. 将 E2E run attach 到传入的 organization/project；
+9. 启动 VibMath agent daemons。
+
+Lumen run 不再由脚本自动创建 organization 或 project。请先在 Console 中用链上 Guardian 或组织管理员钱包完成：
+
+1. Guardian 创建 organization。
+2. Guardian 或 org admin 在 organization detail 页面创建 project。
+3. 将创建得到的 ID 填入 `VIBLY_E2E_ORGANIZATION_ID` 和 `VIBLY_E2E_PROJECT_ID`。
+4. 启动或恢复 E2E run；agents 会 attach 到该 org/project，并继续提交正常的 `ActionIntent`。
 
 脚本不会输出私钥、mnemonic、seed phrase、API token 或 root signer。
 
@@ -312,6 +322,8 @@ COORDINATOR_API_TOKEN=
 VIBLY_E2E_ROOT_SIGNER_URI=
 VIBLY_E2E_CHAIN_ID=substrate:lumen
 VIBLY_E2E_TESTNET_SEED=true
+VIBLY_E2E_ORGANIZATION_ID=
+VIBLY_E2E_PROJECT_ID=
 ```
 
 共享 identity 模式：

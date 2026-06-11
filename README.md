@@ -309,6 +309,8 @@ pnpm e2e:vibmath:lumen:agents:prepare
 Start the full Lumen VibMath flow:
 
 ```bash
+VIBLY_E2E_ORGANIZATION_ID=<guardian-created-org-id> \
+VIBLY_E2E_PROJECT_ID=<guardian-created-project-id> \
 pnpm e2e:vibmath:lumen
 ```
 
@@ -321,7 +323,15 @@ Before starting, the script will:
 5. generate missing local agents;
 6. register missing chain agents;
 7. bond missing stake;
-8. start the VibMath agent daemons.
+8. attach the E2E run to the provided organization/project;
+9. start the VibMath agent daemons.
+
+The Lumen run does not create the organization or project itself. Create them first in Console with a wallet that is a chain Guardian or an organization admin:
+
+1. Guardian creates the organization.
+2. Guardian or org admin creates the project from the organization detail page.
+3. Copy the resulting IDs into `VIBLY_E2E_ORGANIZATION_ID` and `VIBLY_E2E_PROJECT_ID`.
+4. Start or resume the E2E run; agents attach to that org/project and submit normal `ActionIntent`s.
 
 The script never prints private keys or seed phrases.
 
@@ -335,6 +345,8 @@ COORDINATOR_API_TOKEN=
 VIBLY_E2E_ROOT_SIGNER_URI=
 VIBLY_E2E_CHAIN_ID=substrate:lumen
 VIBLY_E2E_TESTNET_SEED=true
+VIBLY_E2E_ORGANIZATION_ID=
+VIBLY_E2E_PROJECT_ID=
 ```
 
 Optional shared identity mode:
