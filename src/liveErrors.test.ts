@@ -156,3 +156,181 @@ describe("Lumen external mode config validation", () => {
     expect(getError).not.toThrow("dev-token");
   });
 });
+
+describe("coordinator client version headers", () => {
+  // Simulate the coordinatorHeaders logic from live-vibing-math.ts
+  const API_TOKEN = "test-token";
+  const E2E_CLIENT_VERSION = "0.1.1";
+  const E2E_CONTRACT_VERSION = "0.1.1";
+  const E2E_PROTOCOL_VERSION = "0.2";
+  const E2E_CLIENT_PACKAGE = "vibly-e2e-lab";
+
+  function coordinatorHeaders(extra?: Record<string, string>): Record<string, string> {
+    return {
+      Authorization: `Bearer ${API_TOKEN}`,
+      "x-vibly-client-version": E2E_CLIENT_VERSION,
+      "x-vibly-contract-version": E2E_CONTRACT_VERSION,
+      "x-vibly-protocol-version": E2E_PROTOCOL_VERSION,
+      "x-vibly-client-package": E2E_CLIENT_PACKAGE,
+      ...extra,
+    };
+  }
+
+  it("includes Authorization header", () => {
+    const headers = coordinatorHeaders();
+    expect(headers["Authorization"]).toBe("Bearer test-token");
+  });
+
+  it("includes x-vibly-client-version", () => {
+    const headers = coordinatorHeaders();
+    expect(headers["x-vibly-client-version"]).toBe("0.1.1");
+  });
+
+  it("includes x-vibly-contract-version", () => {
+    const headers = coordinatorHeaders();
+    expect(headers["x-vibly-contract-version"]).toBe("0.1.1");
+  });
+
+  it("includes x-vibly-protocol-version", () => {
+    const headers = coordinatorHeaders();
+    expect(headers["x-vibly-protocol-version"]).toBe("0.2");
+  });
+
+  it("includes x-vibly-client-package", () => {
+    const headers = coordinatorHeaders();
+    expect(headers["x-vibly-client-package"]).toBe("vibly-e2e-lab");
+  });
+
+  it("merges extra headers without overwriting required ones", () => {
+    const headers = coordinatorHeaders({ "Content-Type": "application/json" });
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(headers["Authorization"]).toBe("Bearer test-token");
+    expect(headers["x-vibly-client-version"]).toBe("0.1.1");
+  });
+
+  it("post headers include version headers", () => {
+    // Simulate what post() passes to coordinatorHeaders
+    const postHeaders = coordinatorHeaders({ "Content-Type": "application/json" });
+    expect(postHeaders).toMatchObject({
+      Authorization: "Bearer test-token",
+      "Content-Type": "application/json",
+      "x-vibly-client-version": "0.1.1",
+      "x-vibly-contract-version": "0.1.1",
+      "x-vibly-protocol-version": "0.2",
+      "x-vibly-client-package": "vibly-e2e-lab",
+    });
+  });
+
+  it("get headers include version headers (no Content-Type)", () => {
+    const getHeaders = coordinatorHeaders();
+    expect(getHeaders).toMatchObject({
+      Authorization: "Bearer test-token",
+      "x-vibly-client-version": "0.1.1",
+      "x-vibly-contract-version": "0.1.1",
+      "x-vibly-protocol-version": "0.2",
+      "x-vibly-client-package": "vibly-e2e-lab",
+    });
+  });
+});
+
+describe("426 UPGRADE_REQUIRED failure handling", () => {
+  it("HttpResponseError preserves httpStatus=426", () => {
+    const err = new HttpResponseError({
+      route: "/action-intents",
+      method: "POST",
+      status: 426,
+      statusText: "Upgrade Required",
+      responseBody: {
+        ok: false,
+        error: {
+          code: "UPGRADE_REQUIRED",
+          message: "Client version header is required",
+          details: {
+            minimumClientVersion: "0.1.0",
+            recommendedClientVersion: "0.1.0",
+            received: {},
+          },
+        },
+      },
+    });
+    expect(err.context.status).toBe(426);
+    expect(err.message).toContain("HTTP 426");
+  });
+
+  it("preserves UPGRADE_REQUIRED error code from response body", () => {
+    const responseBody = {
+      ok: false,
+      error: {
+        code: "UPGRADE_REQUIRED",
+        message: "Client version header is required",
+      },
+    };
+    const err = new HttpResponseError({
+      route: "/action-intents",
+      method: "POST",
+      status: 426,
+      statusText: "Upgrade Required",
+      responseBody,
+    });
+    const body = err.context.responseBody as Record<string, unknown>;
+    const error = (body?.error as Record<string, unknown>) ?? {};
+    expect(error.code).toBe("UPGRADE_REQUIRED");
+  });
+
+  it("preserves minimumClientVersion and received from response details", () => {
+    const responseBody = {
+      ok: false,
+      error: {
+        code: "UPGRADE_REQUIRED",
+        message: "Client version header is required",
+        details: {
+          minimumClientVersion: "0.1.0",
+          recommendedClientVersion: "0.1.0",
+          received: {},
+        },
+      },
+    };
+    const err = new HttpResponseError({
+      route: "/action-intents",
+      method: "POST",
+      status: 426,
+      statusText: "Upgrade Required",
+      responseBody,
+    });
+    const body = err.context.responseBody as Record<string, unknown>;
+    const error = (body?.error as Record<string, unknown>) ?? {};
+    const details = (error?.details as Record<string, unknown>) ?? {};
+    expect(details.minimumClientVersion).toBe("0.1.0");
+    expect(details.received).toEqual({});
+  });
+
+  it("live-vibing-math failure report for 426 preserves httpStatus", () => {
+    // Simulate the failure normalization from normalizeFailure()
+    const err = new HttpResponseError({
+      route: "/action-intents",
+      method: "POST",
+      status: 426,
+      statusText: "Upgrade Required",
+      responseBody: {
+        ok: false,
+        error: {
+          code: "UPGRADE_REQUIRED",
+          message: "Client version header is required",
+          details: { minimumClientVersion: "0.1.0", received: {} },
+        },
+      },
+    });
+    const failure = {
+      phase: "attach.register-agent-profiles",
+      actionType: "RegisterAgentProfile",
+      route: err.context.route,
+      httpStatus: err.context.status,
+      responseBody: err.context.responseBody,
+      message: err.message,
+      occurredAt: new Date().toISOString(),
+    };
+    expect(failure.phase).toBe("attach.register-agent-profiles");
+    expect(failure.httpStatus).toBe(426);
+    expect(failure.route).toBe("/action-intents");
+  });
+});

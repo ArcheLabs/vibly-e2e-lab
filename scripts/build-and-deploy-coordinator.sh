@@ -11,15 +11,42 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 COORDINATOR="${ROOT}/vibly-coordinator"
 
 COMMIT="$(git -C "$COORDINATOR" rev-parse --short HEAD)"
+BUILD_CONTEXT="$(mktemp -d "${TMPDIR:-/tmp}/vibly-coordinator-build.XXXXXX")"
+trap 'rm -rf "$BUILD_CONTEXT"' EXIT
 
-cd "$ROOT"
+rsync_excludes=(
+  --exclude ".git/"
+  --exclude "node_modules/"
+  --exclude "build/"
+  --exclude ".next/"
+  --exclude "coverage/"
+  --exclude ".turbo/"
+  --exclude ".cache/"
+  --exclude "target/"
+  --exclude "*.log"
+  --exclude "*.sqlite"
+  --exclude "*.sqlite3"
+)
+
+for path in \
+  concord \
+  vibly-coordinator \
+  vibly-coordinator-http-contract \
+  vibly-client \
+  vibly-console
+do
+  rsync -a "${rsync_excludes[@]}" "${ROOT}/${path}/" "${BUILD_CONTEXT}/${path}/"
+done
+
+echo "[deploy] Docker build context: ${BUILD_CONTEXT}"
+du -sh "$BUILD_CONTEXT"
 
 docker build \
   --platform linux/amd64 \
-  -f vibly-coordinator/Dockerfile \
+  -f "${BUILD_CONTEXT}/vibly-coordinator/Dockerfile" \
   -t "${IMAGE}:${COMMIT}" \
   -t "${IMAGE}:latest" \
-  .
+  "$BUILD_CONTEXT"
 
 docker push "${IMAGE}:${COMMIT}"
 docker push "${IMAGE}:latest"

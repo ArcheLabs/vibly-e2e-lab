@@ -88,6 +88,25 @@ const KEEP_ALIVE_ON_SUCCESS =
 const KEEP_ALIVE_ON_FAILURE =
   KEEP_ALIVE_ALWAYS || process.env.VIBLY_E2E_KEEP_ALIVE_ON_FAILURE === "true";
 
+// ── Coordinator client version headers ───────────────────────────────────
+// These prevent HTTP 426 UPGRADE_REQUIRED when the coordinator has
+// CLIENT_VERSION_ENFORCEMENT=true.
+const E2E_CLIENT_VERSION =
+  process.env.VIBLY_E2E_CLIENT_VERSION ??
+  "0.1.1";
+
+const E2E_CONTRACT_VERSION =
+  process.env.VIBLY_E2E_CONTRACT_VERSION ??
+  "0.1.1";
+
+const E2E_PROTOCOL_VERSION =
+  process.env.VIBLY_E2E_PROTOCOL_VERSION ??
+  "0.2";
+
+const E2E_CLIENT_PACKAGE =
+  process.env.VIBLY_E2E_CLIENT_PACKAGE ??
+  "vibly-e2e-lab";
+
 type Json = Record<string, unknown>;
 
 type AgentConfig = {
@@ -203,6 +222,9 @@ async function main(): Promise<void> {
   }
   await mkdir(runRoot, { recursive: true });
   setPipeLogDir(runRoot);
+  console.log(
+    `[e2e:live] coordinator client version headers: package=${E2E_CLIENT_PACKAGE} client=${E2E_CLIENT_VERSION} contract=${E2E_CONTRACT_VERSION} protocol=${E2E_PROTOCOL_VERSION}`,
+  );
   const mode = EXTERNAL_COORDINATOR ? "external" : "local";
   const existingState = await loadLiveRunState(DATA_DIR, runName);
   if (existingState?.status === "passed" && !RESUME_RUN && !RESET_RUN) {
@@ -1223,6 +1245,19 @@ async function getInbox(principalId: string, organizationId: string, projectId: 
   return unwrapKey<Json>(body, "inbox");
 }
 
+// ── Coordinator request helpers ──────────────────────────────────────────
+
+function coordinatorHeaders(extra?: Record<string, string>): Record<string, string> {
+  return {
+    Authorization: `Bearer ${API_TOKEN}`,
+    "x-vibly-client-version": E2E_CLIENT_VERSION,
+    "x-vibly-contract-version": E2E_CONTRACT_VERSION,
+    "x-vibly-protocol-version": E2E_PROTOCOL_VERSION,
+    "x-vibly-client-package": E2E_CLIENT_PACKAGE,
+    ...extra,
+  };
+}
+
 async function action(type: string, principalId: string, payload: Json): Promise<{ aggregateRef: { id: string; kind: string } }> {
   // Save lastAction for failure context before making the request
   const startedAt = new Date().toISOString();
@@ -1245,7 +1280,7 @@ async function action(type: string, principalId: string, payload: Json): Promise
 async function post(route: string, body: Json): Promise<Json> {
   const response = await fetch(`${COORDINATOR_URL}${route}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${API_TOKEN}` },
+    headers: coordinatorHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
   return parseResponse(route, response, "POST");
@@ -1254,7 +1289,7 @@ async function post(route: string, body: Json): Promise<Json> {
 async function get<T extends Json = Json>(route: string, query?: Record<string, string | number>): Promise<T> {
   const url = new URL(`${COORDINATOR_URL}${route}`);
   for (const [key, value] of Object.entries(query ?? {})) url.searchParams.set(key, String(value));
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${API_TOKEN}` } });
+  const response = await fetch(url, { headers: coordinatorHeaders() });
   return parseResponse(route, response, "GET") as Promise<T>;
 }
 
