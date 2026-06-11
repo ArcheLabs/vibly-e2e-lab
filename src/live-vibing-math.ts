@@ -68,7 +68,7 @@ const COORDINATOR_START_TIMEOUT_MS = Number(process.env.VIBLY_E2E_COORDINATOR_ST
 const API_TOKEN = process.env.COORDINATOR_API_TOKEN ?? "dev-token";
 const CHAIN_ID =
   process.env.VIBLY_E2E_CHAIN_ID ??
-  (IS_LUMEN_PROFILE ? "substrate:lumen" : "substrate:vibly-solo");
+  (IS_LUMEN_PROFILE ? "substrate:vibly-testnet" : "substrate:vibly-solo");
 const USE_REAL_STAKE = resolveUseRealStake("e2e:live-llm");
 const ENABLE_GET_VIB_LOCAL = process.env.VIBLY_E2E_ENABLE_GET_VIB_LOCAL === "true";
 const DEFAULT_GET_VIB_DEPOSIT_ADDRESS = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
@@ -300,7 +300,12 @@ async function main(): Promise<void> {
 
     const agents = await loadYaml<{ agents: AgentConfig[] }>("agents.yaml");
     state = await setPhase(state, "start-agent-daemons");
-    await startAgentDaemons(agents.agents.filter((agent) => agent.behavior.lazy !== true), state.projectId!);
+    await startAgentDaemons(
+      agents.agents.filter((agent) => agent.behavior.lazy !== true),
+      state.guardianPrincipalId!,
+      state.organizationId!,
+      state.projectId!,
+    );
 
     state = await setPhase(state, "create-first-observation-task");
     if (!state.firstObservationTaskId) {
@@ -873,12 +878,15 @@ function hasBlockingObligation(inbox: Json, principalId: string): boolean {
   return ((inbox.notifications as Json[] | undefined) ?? []).some((item) => item.type === "ProposalCreationRequest" && item.status === "open");
 }
 
-async function startAgentDaemons(agents: AgentConfig[], projectId: string): Promise<void> {
+async function startAgentDaemons(agents: AgentConfig[], actorPrincipalId: string, organizationId: string, projectId: string): Promise<void> {
   const runName = sanitizeRunName(process.env.VIBLY_E2E_RUN_NAME ?? "live-vibing-math");
   const started: Array<{ agentId: string; child: ChildProcessWithoutNullStreams }> = [];
   for (const agent of agents) {
     const home = path.join(DATA_DIR, "live-runs", runName, "clients", agent.id);
+    const binding = await resolveDaemonAgentBinding(agent, organizationId);
+    await ensureDaemonStakeReady(agent, actorPrincipalId, binding);
     await mkdir(home, { recursive: true });
+    await rm(path.join(home, "network-state.json"), { force: true });
     await writeFile(path.join(home, "config.json"), JSON.stringify({
       version: "0.1.0",
       defaultProfile: "default",
@@ -888,7 +896,19 @@ async function startAgentDaemons(agents: AgentConfig[], projectId: string): Prom
           coordinatorUrl: COORDINATOR_URL,
           principalId: agent.principalId,
           agentId: agent.id,
+          localAgentId: binding.localAgentId,
+          identityId: binding.identityId,
+          chainAgentId: binding.chainAgentId,
+          organizationId: binding.organizationId,
           projectId,
+          network: {
+            id: CHAIN_ID,
+            displayName: IS_LUMEN_PROFILE ? "Lumen" : "Local",
+            label: IS_LUMEN_PROFILE ? "Lumen" : "Local",
+            stage: IS_LUMEN_PROFILE || EXTERNAL_COORDINATOR ? "testnet" : "local",
+            status: "active",
+            coordinatorUrl: COORDINATOR_URL,
+          },
           apiTokenRef: "env:VIBLY_API_TOKEN",
           sync: { enableSse: true },
           daemon: {
@@ -904,6 +924,7 @@ async function startAgentDaemons(agents: AgentConfig[], projectId: string): Prom
         ...process.env,
         VIBLY_HOME: home,
         VIBLY_API_TOKEN: API_TOKEN,
+        VIBLY_NETWORK_ID: CHAIN_ID,
         OPENAI_API_KEY: process.env.OPENAI_API_KEY,
         OPENAI_BASE_URL: process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1",
         OPENAI_MODEL: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
@@ -933,6 +954,60 @@ async function startAgentDaemons(agents: AgentConfig[], projectId: string): Prom
       ].join("\n"),
     );
   }
+}
+
+async function resolveDaemonAgentBinding(agent: AgentConfig, organizationId: string): Promise<{
+  localAgentId: string;
+  identityId: string;
+  chainAgentId: string;
+  organizationId: string;
+}> {
+  const profile = await get<Json>(`/agent-profiles/${agent.principalId}`)
+    .then((body) => unwrapKey<Json>(body, "agent"))
+    .catch(() => undefined);
+  const mapped = getAgentChainMap()[agent.id] ?? getAgentChainMap()[agent.principalId];
+  const identityId = readOptionalString(profile?.identityId) ?? mapped?.identityId;
+  const chainAgentId = readOptionalString(profile?.chainAgentId) ?? mapped?.chainAgentId;
+  if (!identityId || !chainAgentId) {
+    throw new Error(
+      `Agent ${agent.id} is missing daemon chain binding. ` +
+      `Expected identityId and chainAgentId on /agent-profiles/${agent.principalId} or VIBLY_E2E_AGENT_CHAIN_MAP.`,
+    );
+  }
+  return {
+    localAgentId: readOptionalString(profile?.localAgentId) ?? agent.id,
+    identityId,
+    chainAgentId,
+    organizationId: readOptionalString(profile?.organizationId) ?? organizationId,
+  };
+}
+
+async function ensureDaemonStakeReady(
+  agent: AgentConfig,
+  actorPrincipalId: string,
+  binding: { identityId: string; chainAgentId: string },
+): Promise<void> {
+  if (!USE_REAL_STAKE) {
+    await action("UpsertAgentStakeLedger", actorPrincipalId, {
+      chainId: CHAIN_ID,
+      identityId: binding.identityId,
+      chainAgentId: binding.chainAgentId,
+      principalId: agent.principalId,
+      fundingAccount: `${agent.id}_funding`,
+      activeAmount: "100",
+      unbondingAmount: "0",
+      status: "active",
+      releaseBlocked: false,
+      updatedAtBlock: "1",
+    });
+    return;
+  }
+
+  await waitForCoordinatorStakeSync(COORDINATOR_URL, API_TOKEN, agent.principalId, 120_000);
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 async function startCoordinator(runRoot: string, preserveDb: boolean): Promise<ChildProcessWithoutNullStreams> {

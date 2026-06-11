@@ -441,7 +441,7 @@ async function prepareLumenAgents(): Promise<void> {
 
 async function registerIdentityOnChain(publicAddress: string, signerUri: string): Promise<string> {
   const chainRpcUrl = resolveChainRpcUrl();
-  const chainId = process.env.VIBLY_E2E_CHAIN_ID ?? "substrate:lumen";
+  const chainId = process.env.VIBLY_E2E_CHAIN_ID ?? "substrate:vibly-testnet";
 
   if (!chainRpcUrl) {
     throw new Error("Chain RPC URL is required. Set VIBLY_E2E_CHAIN_RPC_URL or LUMEN_CHAIN_RPC_URL.");
