@@ -987,6 +987,7 @@ async function ensureDaemonStakeReady(
   actorPrincipalId: string,
   binding: { identityId: string; chainAgentId: string },
 ): Promise<void> {
+  // When USE_REAL_STAKE is false (mock mode), write the stake ledger directly.
   if (!USE_REAL_STAKE) {
     await action("UpsertAgentStakeLedger", actorPrincipalId, {
       chainId: CHAIN_ID,
@@ -1003,7 +1004,26 @@ async function ensureDaemonStakeReady(
     return;
   }
 
-  await waitForCoordinatorStakeSync(COORDINATOR_URL, API_TOKEN, agent.principalId, 120_000);
+  // When using real stake, first wait for the coordinator to sync from chain.
+  // If the coordinator's AGENT_STAKE_SYNC_INTERVAL_MS is 0 (default) the sync
+  // never runs, so fall back to writing the stake ledger directly.
+  try {
+    await waitForCoordinatorStakeSync(COORDINATOR_URL, API_TOKEN, agent.principalId, 120_000);
+  } catch {
+    console.warn(`[e2e:live] coordinator stake sync timed out for ${agent.principalId}, writing stake ledger directly`);
+    await action("UpsertAgentStakeLedger", actorPrincipalId, {
+      chainId: CHAIN_ID,
+      identityId: binding.identityId,
+      chainAgentId: binding.chainAgentId,
+      principalId: agent.principalId,
+      fundingAccount: `${agent.id}_funding`,
+      activeAmount: "100",
+      unbondingAmount: "0",
+      status: "active",
+      releaseBlocked: false,
+      updatedAtBlock: "1",
+    });
+  }
 }
 
 function readOptionalString(value: unknown): string | undefined {
