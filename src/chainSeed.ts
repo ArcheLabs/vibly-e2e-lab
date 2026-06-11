@@ -235,11 +235,12 @@ export async function waitForCoordinatorStakeSync(
   apiToken: string,
   principalId: string,
   timeoutMs = 60_000,
+  chainId?: string,
 ): Promise<void> {
   await waitFor(
     async () => {
       const resp = await fetch(`${coordinatorUrl}/agent-profiles/${principalId}`, {
-        headers: { Authorization: `Bearer ${apiToken}` },
+        headers: coordinatorRequestHeaders(apiToken, chainId),
       });
       if (!resp.ok) return undefined;
       const body = (await resp.json()) as {
@@ -250,6 +251,17 @@ export async function waitForCoordinatorStakeSync(
     `coordinator stake sync for principalId=${principalId}`,
     timeoutMs,
   );
+}
+
+function coordinatorRequestHeaders(apiToken: string, chainId?: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${apiToken}`,
+    "x-vibly-client-version": process.env.VIBLY_E2E_CLIENT_VERSION ?? "0.1.1",
+    "x-vibly-contract-version": process.env.VIBLY_E2E_CONTRACT_VERSION ?? "0.1.1",
+    "x-vibly-protocol-version": process.env.VIBLY_E2E_PROTOCOL_VERSION ?? "0.2",
+    "x-vibly-client-package": process.env.VIBLY_E2E_CLIENT_PACKAGE ?? "vibly-e2e-lab",
+    ...(chainId ? { "x-vibly-network-id": chainId } : {}),
+  };
 }
 
 // ── Internal: CLI spawn helper ────────────────────────────────────────────────

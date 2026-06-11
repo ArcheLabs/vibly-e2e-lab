@@ -73,6 +73,10 @@ const USE_REAL_STAKE = resolveUseRealStake("e2e:live-llm");
 const ENABLE_GET_VIB_LOCAL = process.env.VIBLY_E2E_ENABLE_GET_VIB_LOCAL === "true";
 const DEFAULT_GET_VIB_DEPOSIT_ADDRESS = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
 const EXTERNAL_COORDINATOR = process.env.VIBLY_E2E_EXTERNAL_COORDINATOR === "true";
+const COORDINATOR_STAKE_SYNC_TIMEOUT_MS = Number(
+  process.env.VIBLY_E2E_COORDINATOR_STAKE_SYNC_TIMEOUT_MS ??
+  (EXTERNAL_COORDINATOR ? "15000" : "120000"),
+);
 const TESTNET_SEED = process.env.VIBLY_E2E_TESTNET_SEED === "true";
 const RESUME_RUN = process.env.VIBLY_E2E_RESUME === "true";
 const RESET_RUN = process.env.VIBLY_E2E_RESET_RUN === "true";
@@ -153,6 +157,7 @@ let soloNodeHandle: SoloNodeHandle | undefined;
 let paymentNodeHandle: SoloNodeHandle | undefined;
 let indexerHandle: IndexerHandle | undefined;
 let localProfile: E2eNetworkProfile | undefined;
+let coordinatorStakeSyncUnavailable = false;
 
 class PauseExit extends Error {
   constructor(readonly boundary: PauseBoundary) {
@@ -547,7 +552,7 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
       });
 
       if (USE_REAL_STAKE && binding.identityId && binding.chainAgentId) {
-        await waitForCoordinatorStakeSync(COORDINATOR_URL, API_TOKEN, agent.principalId, 60_000).catch((err) => {
+        await waitForCoordinatorStakeSync(COORDINATOR_URL, API_TOKEN, agent.principalId, 60_000, CHAIN_ID).catch((err) => {
           if (!EXTERNAL_COORDINATOR) throw err;
           console.warn(`[e2e:live] stake sync not confirmed for ${agent.principalId}: ${String(err)}`);
         });
@@ -670,7 +675,7 @@ async function ensureSeeded(state: LiveRunState): Promise<LiveRunState> {
     });
 
     if (USE_REAL_STAKE && binding.identityId && binding.chainAgentId) {
-      await waitForCoordinatorStakeSync(COORDINATOR_URL, API_TOKEN, agent.principalId, 60_000).catch((err) => {
+      await waitForCoordinatorStakeSync(COORDINATOR_URL, API_TOKEN, agent.principalId, 60_000, CHAIN_ID).catch((err) => {
         if (!EXTERNAL_COORDINATOR) throw err;
         console.warn(`[e2e:live] stake sync not confirmed for ${agent.principalId}: ${String(err)}`);
       });
@@ -989,18 +994,13 @@ async function ensureDaemonStakeReady(
 ): Promise<void> {
   // When USE_REAL_STAKE is false (mock mode), write the stake ledger directly.
   if (!USE_REAL_STAKE) {
-    await action("UpsertAgentStakeLedger", actorPrincipalId, {
-      chainId: CHAIN_ID,
-      identityId: binding.identityId,
-      chainAgentId: binding.chainAgentId,
-      principalId: agent.principalId,
-      fundingAccount: `${agent.id}_funding`,
-      activeAmount: "100",
-      unbondingAmount: "0",
-      status: "active",
-      releaseBlocked: false,
-      updatedAtBlock: "1",
-    });
+    await upsertDaemonStakeLedger(agent, actorPrincipalId, binding);
+    return;
+  }
+
+  if (coordinatorStakeSyncUnavailable) {
+    console.warn(`[e2e:live] coordinator stake sync unavailable, writing stake ledger directly for ${agent.principalId}`);
+    await upsertDaemonStakeLedger(agent, actorPrincipalId, binding);
     return;
   }
 
@@ -1008,22 +1008,31 @@ async function ensureDaemonStakeReady(
   // If the coordinator's AGENT_STAKE_SYNC_INTERVAL_MS is 0 (default) the sync
   // never runs, so fall back to writing the stake ledger directly.
   try {
-    await waitForCoordinatorStakeSync(COORDINATOR_URL, API_TOKEN, agent.principalId, 120_000);
+    await waitForCoordinatorStakeSync(COORDINATOR_URL, API_TOKEN, agent.principalId, COORDINATOR_STAKE_SYNC_TIMEOUT_MS, CHAIN_ID);
   } catch {
+    coordinatorStakeSyncUnavailable = true;
     console.warn(`[e2e:live] coordinator stake sync timed out for ${agent.principalId}, writing stake ledger directly`);
-    await action("UpsertAgentStakeLedger", actorPrincipalId, {
-      chainId: CHAIN_ID,
-      identityId: binding.identityId,
-      chainAgentId: binding.chainAgentId,
-      principalId: agent.principalId,
-      fundingAccount: `${agent.id}_funding`,
-      activeAmount: "100",
-      unbondingAmount: "0",
-      status: "active",
-      releaseBlocked: false,
-      updatedAtBlock: "1",
-    });
+    await upsertDaemonStakeLedger(agent, actorPrincipalId, binding);
   }
+}
+
+async function upsertDaemonStakeLedger(
+  agent: AgentConfig,
+  actorPrincipalId: string,
+  binding: { identityId: string; chainAgentId: string },
+): Promise<void> {
+  await action("UpsertAgentStakeLedger", actorPrincipalId, {
+    chainId: CHAIN_ID,
+    identityId: binding.identityId,
+    chainAgentId: binding.chainAgentId,
+    principalId: agent.principalId,
+    fundingAccount: `${agent.id}_funding`,
+    activeAmount: "100",
+    unbondingAmount: "0",
+    status: "active",
+    releaseBlocked: false,
+    updatedAtBlock: "1",
+  });
 }
 
 function readOptionalString(value: unknown): string | undefined {

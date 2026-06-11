@@ -277,7 +277,7 @@ async function runDeterministicScenario(): Promise<Json> {
       dutyStatus: "active",
     });
     if (USE_REAL_STAKE) {
-      await waitForCoordinatorStakeSync(COORDINATOR_URL, API_TOKEN, agent.principalId, 60_000);
+      await waitForCoordinatorStakeSync(COORDINATOR_URL, API_TOKEN, agent.principalId, 60_000, CHAIN_ID);
     }
     await action("AddMember", guardian, {
       organizationId: orgId,
