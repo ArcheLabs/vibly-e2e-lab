@@ -162,6 +162,7 @@ export async function seedChainAgent(input: ChainSeedInput): Promise<ChainSeedRe
         "--identity-id", identityId,
         "--agent-id", chainAgentId,
         "--amount", bondAmount,
+        "--confirm",
         ...sharedSignerOpts,
       ]);
       console.log(`[chain-seed] Bond tx submitted: txHash=${bondReceipt.txHash}`);
@@ -178,6 +179,7 @@ export async function seedChainAgent(input: ChainSeedInput): Promise<ChainSeedRe
       "--identity-id", identityId,
       "--agent-id", chainAgentId,
       "--amount", bondAmount,
+      "--confirm",
       ...sharedSignerOpts,
     ]);
     console.log(`[chain-seed] Bond tx submitted: txHash=${bondReceipt.txHash}`);

@@ -30,6 +30,14 @@ import {
   withConsoleDevEnv,
 } from "./lifecycle/consoleDev.js";
 import { seedChainAgent, waitForCoordinatorStakeSync, type ChainSeedReceipt } from "./chainSeed.js";
+import { defaultLumenCacheDir } from "./lumenIdentityCache.js";
+import {
+  loadAgentsPrivate,
+  saveAgentsPrivate,
+  saveAgentsPublic,
+  type CachedAgentPrivate,
+  type LumenAgentsPublic,
+} from "./lumenAgentCache.js";
 import {
   createInitialLiveRunState,
   isPauseBoundary,
@@ -374,7 +382,7 @@ async function main(): Promise<void> {
     state = await setPhase(state, "build-report");
     reportPath = path.join(REPORT_DIR, `live-llm-${Date.now()}.json`);
     contentReportPath = path.join(REPORT_DIR, `live-llm-content-${Date.now()}.md`);
-    state = { ...state, status: "passed" };
+    state = { ...state, status: "passed", failure: undefined };
     await saveLiveRunState(DATA_DIR, state);
     await writeFile(reportPath, JSON.stringify({ ...state, coordinatorUrl: COORDINATOR_URL }, null, 2));
     await writeFile(contentReportPath, await buildContentReport(state));
@@ -762,6 +770,12 @@ async function resolveChainBinding(agent: AgentConfig, guardian: string): Promis
       return mapped;
     }
 
+    const cached = await getCachedLumenAgent(agent);
+    if (cached?.identityId && cached.chainAgentId) {
+      console.log(`[e2e:live] Skipping chain seed for ${agent.id}: cached identityId=${cached.identityId} chainAgentId=${cached.chainAgentId}`);
+      return { identityId: cached.identityId, chainAgentId: cached.chainAgentId };
+    }
+
     const chainRpcUrl =
       process.env.VIBLY_E2E_CHAIN_RPC_URL ??
       process.env.LUMEN_CHAIN_RPC_URL ??
@@ -776,7 +790,7 @@ async function resolveChainBinding(agent: AgentConfig, guardian: string): Promis
         "and VIBLY_E2E_INDEXER_URL/LUMEN_INDEXER_GRAPHQL_URL/SUBSTRATE_INDEXER_URL.",
       );
     }
-    const sharedIdentityId = mapped?.identityId ? mapped.identityId : getSharedIdentityId(agent);
+    const sharedIdentityId = mapped?.identityId ? mapped.identityId : cached?.identityId ?? getSharedIdentityId(agent);
     const receipt = await seedChainAgent({
       agentId: agent.id,
       coordinatorUrl: COORDINATOR_URL,
@@ -788,7 +802,9 @@ async function resolveChainBinding(agent: AgentConfig, guardian: string): Promis
       rootSignerUri: process.env.VIBLY_E2E_ROOT_SIGNER_URI,
       sharedIdentityId,
       registerIdentity: shouldRegisterIdentity(agent, sharedIdentityId),
+      agentRef: cached?.agentRef,
     });
+    await updateCachedLumenAgentBinding(agent, receipt, process.env.VIBLY_E2E_TESTNET_BOND_AMOUNT ?? "100");
     return { identityId: receipt.identityId, chainAgentId: receipt.chainAgentId, receipt };
   }
 
@@ -819,6 +835,65 @@ function getSharedIdentityId(agent: AgentConfig): string | undefined {
 function shouldRegisterIdentity(agent: AgentConfig, sharedIdentityId: string | undefined): boolean {
   if (sharedIdentityId) return false;
   return process.env.VIBLY_E2E_REGISTER_IDENTITY !== "false";
+}
+
+async function getCachedLumenAgent(agent: AgentConfig): Promise<CachedAgentPrivate | undefined> {
+  if (!IS_LUMEN_PROFILE) return undefined;
+  const cache = await loadAgentsPrivate(defaultLumenCacheDir());
+  return cache?.agents.find((item) => item.agentId === agent.id || item.principalId === agent.principalId);
+}
+
+async function updateCachedLumenAgentBinding(
+  agent: AgentConfig,
+  receipt: ChainSeedReceipt,
+  bondAmount: string,
+): Promise<void> {
+  if (!IS_LUMEN_PROFILE) return;
+  const cacheDir = defaultLumenCacheDir();
+  const cache = await loadAgentsPrivate(cacheDir);
+  if (!cache) return;
+
+  let updated = false;
+  const agents = cache.agents.map((item) => {
+    if (item.agentId !== agent.id && item.principalId !== agent.principalId) return item;
+    updated = true;
+    return {
+      ...item,
+      identityId: receipt.identityId,
+      chainAgentId: receipt.chainAgentId,
+      bondAmount,
+      bondStatus: receipt.indexerLedger.status,
+    };
+  });
+
+  if (!updated) return;
+
+  const updatedCache = {
+    ...cache,
+    updatedAt: new Date().toISOString(),
+    agents,
+  };
+  await saveAgentsPrivate(cacheDir, updatedCache);
+
+  const publicAgents: LumenAgentsPublic = {
+    version: 1,
+    profile: "lumen",
+    network: "lumen",
+    createdAt: updatedCache.createdAt,
+    updatedAt: updatedCache.updatedAt,
+    agents: updatedCache.agents.map((item) => ({
+      agentId: item.agentId,
+      principalId: item.principalId,
+      publicAddress: item.publicAddress,
+      publicKey: item.publicKey,
+      identityId: item.identityId,
+      agentRef: item.agentRef,
+      chainAgentId: item.chainAgentId,
+      bondAmount: item.bondAmount,
+      bondStatus: item.bondStatus,
+    })),
+  };
+  await saveAgentsPublic(cacheDir, publicAgents);
 }
 
 async function checkpoint(state: LiveRunState, boundary: PauseBoundary, requestedPause?: string): Promise<void> {

@@ -145,6 +145,7 @@ async function scenarioA(ctx: StakeScenariosContext): Promise<void> {
     "--identity-id", seed.identityId,
     "--agent-id", seed.chainAgentId,
     "--amount", "50",
+    "--confirm",
     "--json",
   ]);
 
@@ -188,6 +189,7 @@ async function scenarioB(ctx: StakeScenariosContext): Promise<void> {
     "--identity-id", seed.identityId,
     "--agent-id", seed.chainAgentId,
     "--amount", "50",
+    "--confirm",
     "--json",
   ]);
 
@@ -274,6 +276,7 @@ async function scenarioCandD(
     "--identity-id", seed.identityId,
     "--agent-id", seed.chainAgentId,
     "--amount", "100",
+    "--confirm",
     "--json",
   ]);
 
