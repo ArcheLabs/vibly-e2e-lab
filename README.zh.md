@@ -13,8 +13,6 @@ pnpm e2e:live-llm         # 多个真实 client daemon 使用 LLM 实际运行 V
 pnpm e2e:live-llm:ci      # CI/自动化用：成功后清理并退出
 VIBLY_E2E_RUN_NAME=my-run pnpm e2e:live-llm:resume  # 断点继续
 VIBLY_E2E_SKIP_CONSOLE=true pnpm e2e:local   # 跳过 Console 冒烟测试，适合 CI
-pnpm dev:get-vib-console    # 手动验证 Get VIB UI：启动本地链、Coordinator、Console；本地 claim root 默认每 2 分钟上传一次；不跑 Playwright，也不启动 agent
-VIBLY_E2E_PUBLIC_CONSOLE_PORT=3002 pnpm dev:get-vib-console  # SSH 转发本地 3002 -> 远程 3001 时使用
 pnpm deploy:all            # 跨仓库部署计划预览
 pnpm deploy:build          # 跨仓库统一构建
 pnpm deploy:gcp:plan       # GCP 模板预览
@@ -163,7 +161,6 @@ Coordinator 的 env yaml，而 Cloud SQL 挂载也会作为一等部署变量传
 - `vibly-indexer` 虽然已纳入 deploy planner，但它并不是 serverless 服务。正确的线上部署仍然需要拉起它的 Docker Compose 栈，或者等价的 Postgres + SubQuery 拓扑。
 - `vibly-coordinator` 实际上也不是“纯无服务”。应用进程可以跑在 Cloud Run 上，但生产环境必须使用 `STORAGE_MODE=postgres` 并连接外部 Postgres；Coordinator 启动时会自行跑迁移。
 - 内建 GCP deploy profile 现在会显式校验这件事：如果 `GCP_VIBLY_COORDINATOR_ENV_FILE` 没有指向存在的 Coordinator env yaml，或者 `GCP_VIBLY_COORDINATOR_CLOUDSQL_INSTANCE` 未设置，就会直接失败。
-- 公网 `Lumen` 和 `Monolith` 不需要单独再部署一个本地 payment chain。`Lumen` 直接使用 Paseo RPC 处理 Get VIB 的 relay 侧转账，`Monolith` 直接使用 Polkadot 主网 RPC。本地 E2E / 手动 Get VIB 联调时额外启的 payment chain，只属于实验室环境。
 - `pnpm deploy:npm` 现在默认只处理真正会发布到 npm 的项目：`concord`、`vibly-client`、`vibly-coordinator-http-contract`。如果你要覆盖这个默认集合，再显式传 `--only=...`。
 - 内建 npm profile 现在优先使用 Access Token。设置 `NPM_TOKEN` 或 `NODE_AUTH_TOKEN` 即可；脚本会自动把 `NPM_TOKEN` 映射成 `NODE_AUTH_TOKEN`，并临时生成 `.npmrc`，不再默认设计 OTP 流程。
 - npm profile 现在也会更早失败并给出明确提示：先检查 `npm whoami`，对于单包发布还会先检查该版本是否已经存在，再决定是否执行 `pnpm publish`。
@@ -241,16 +238,12 @@ COORDINATOR_API_TOKEN=... \
 VIBLY_E2E_RUN_NAME=testnet-live \
 pnpm e2e:live-llm:testnet
 
-# 本地运行并启用 Get VIB 本地 relay 配置（用于 Console 的 Get VIB 页面联调）
-VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live pnpm e2e:live-llm:get-vib-local
 ```
 
 `VIBLY_E2E_PAUSE_AT` 可取：`after-seed`、`after-first-observation`、`after-proposal`、`after-artifacts`、`after-knowledge-sync`、`before-second-observation`。
 `VIBLY_E2E_COORDINATOR_START_TIMEOUT_MS` 可用于放宽本地 coordinator 启动等待时间（默认 120000ms）。
-`VIBLY_E2E_ENABLE_GET_VIB_LOCAL=true` 时，会为 coordinator 注入本地 Get VIB relay 相关配置；可用 `VIBLY_E2E_GET_VIB_RELAY_RPC` 与 `VIBLY_E2E_GET_VIB_DEPOSIT_ADDRESS` 覆盖默认值。
 测试网支付链内置 Paseo RPC 兜底地址，激励测试网支付链内置 Polkadot 主网 RPC 兜底地址；可分别用 `VIBLY_E2E_PASEO_RPC_URLS` 与 `VIBLY_E2E_POLKADOT_RPC_URLS` 追加覆盖。
 远程服务器手动验 Console 时，如果本地端口和远程端口不同，可设置 `VIBLY_E2E_PUBLIC_CONSOLE_PORT=3002`；如果需要完整地址，可设置 `VIBLY_E2E_PUBLIC_CONSOLE_URL=http://127.0.0.1:3002`。
-`pnpm dev:get-vib-console` 会默认启用本地链 claim root uploader，并设置 `GET_VIB_ROOT_UPLOAD_INTERVAL_MS=120000`；如需关闭自动上传，可设置 `GET_VIB_ROOT_UPLOAD_INTERVAL_MS=0`。
 测试网默认使用已存在 / 预先质押的 agent 身份；如需显式提供链上绑定，可设置 `VIBLY_E2E_AGENT_CHAIN_MAP` JSON。
 `pnpm e2e:live-llm`、`pnpm e2e:live-llm:resume` 和 `pnpm e2e:live-llm:testnet` 默认会在成功后保留 Coordinator、Console 和 agent daemon 进程，并打印 Console URL。agent daemon 会继续运行并监听新的任务/义务；查看结束后按 Ctrl+C，会执行清理。需要自动退出时使用 `pnpm e2e:live-llm:ci`。
 
@@ -380,15 +373,10 @@ knowledge/         — 初始知识条目（文献索引、哥德巴赫背景、
 
 | 命令 | 说明 |
 |---|---|
-| `pnpm e2e:get-vib` | Get VIB 全流程冒烟：获取配置、报价、创建订单、确认入账、生成 manifest、查询 summary/proof/records；配置 `VIBLY_E2E_GET_VIB_CHAIN_RPC` 时会额外执行链上 claim 验证 |
-| `pnpm e2e:get-vib:polkadot-local` | 面向本地 Polkadot relay + 本地链联调的 Get VIB 流程：发送 relay DOT、等待观察入账并 finalize，然后执行链上 claim 验证 |
-| `pnpm dev:get-vib-console` | 手动 Get VIB Console 联调：启动本地 Vibly 链、支付链、Coordinator 和 Console，并保持运行；不执行 Playwright，不启动 agent daemon |
 | `pnpm deploy:all` | 跨仓库部署计划 / 编排入口，默认 phase 为 `plan` |
 | `pnpm deploy:build` | 跨仓库统一 build/typecheck |
 | `pnpm deploy:gcp:plan` | 预览内建的 Google Cloud 部署模板 |
 | `pnpm deploy:gcp` | 执行内建的 Google Cloud 部署模板 |
 | `pnpm deploy:npm:plan` | 预览内建的 npm 发布模板 |
 | `pnpm deploy:npm` | 执行内建的 npm 发布模板 |
-| `pnpm e2e:live-llm:get-vib-local` | Live LLM 运行时启用本地 Get VIB relay 配置，便于 Console 的 Get VIB 页面联调 |
-| `pnpm e2e:live-llm:resume:get-vib-local` | 与上条相同，但用于 resume 模式 |
 | `pnpm e2e:console` | 启动本地网络 profile 后运行 Console Playwright 冒烟测试 |

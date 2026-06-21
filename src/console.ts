@@ -16,24 +16,20 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 const DATA_DIR = path.join(ROOT, "data");
 const COORDINATOR_PORT = Number(process.env.VIBLY_E2E_COORDINATOR_PORT ?? "8787");
 const CONSOLE_PORT = Number(process.env.VIBLY_E2E_CONSOLE_PORT ?? "3001");
-const PAYMENT_CHAIN_RPC_PORT = Number(process.env.VIBLY_E2E_PAYMENT_CHAIN_RPC_PORT ?? "9945");
 const COORDINATOR_URL = process.env.COORDINATOR_URL ?? `http://127.0.0.1:${COORDINATOR_PORT}`;
 const API_TOKEN = process.env.COORDINATOR_API_TOKEN ?? "dev-token";
-const DEPOSIT_ADDRESS = process.env.VIBLY_DOT_RECEIVING_ADDRESS ?? process.env.VIBLY_E2E_GET_VIB_DEPOSIT_ADDRESS ?? "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
 
 const children: ChildProcessWithoutNullStreams[] = [];
 
 async function main(): Promise<void> {
   await mkdir(DATA_DIR, { recursive: true });
   const vibly = await startSoloNode({ rpcExternal: true, serviceName: "Vibly chain" });
-  const payment = await startSoloNode({ rpcPort: PAYMENT_CHAIN_RPC_PORT, rpcExternal: true, serviceName: "payment chain" });
-  const profile = localNetworkProfile({ coordinatorUrl: COORDINATOR_URL, viblyRpcUrl: vibly.wsUrl, paymentRpcUrl: payment.wsUrl });
-  const coordinator = await startCoordinator(profile.paymentRpcUrls[0] ?? payment.wsUrl);
+  const profile = localNetworkProfile({ coordinatorUrl: COORDINATOR_URL, viblyRpcUrl: vibly.wsUrl });
+  const coordinator = await startCoordinator();
   const consoleProcess = await startConsole({
     profilesJson: publicConsoleNetworkProfiles(profile),
     coordinatorProfilesJson: serverCoordinatorNetworkProfiles(profile),
     viblyRpcUrl: profile.viblyRpcUrls[0] ?? vibly.wsUrl,
-    paymentRpcUrl: profile.paymentRpcUrls[0] ?? payment.wsUrl,
     networkId: profile.id,
     networkName: profile.label,
   });
@@ -44,12 +40,11 @@ async function main(): Promise<void> {
     consoleProcess.kill("SIGTERM");
     coordinator.kill("SIGTERM");
     await stopChildren();
-    await stopOptionalNode(payment);
     await stopOptionalNode(vibly);
   }
 }
 
-async function startCoordinator(paymentRpcUrl: string): Promise<ChildProcessWithoutNullStreams> {
+async function startCoordinator(): Promise<ChildProcessWithoutNullStreams> {
   await assertPortAvailable({
     port: COORDINATOR_PORT,
     serviceName: "Console E2E coordinator",
@@ -74,11 +69,6 @@ async function startCoordinator(paymentRpcUrl: string): Promise<ChildProcessWith
       ENABLE_DEV_ROUTES: "true",
       LOG_LEVEL: process.env.LOG_LEVEL ?? "warn",
       GOVERNANCE_BACKENDS: "none",
-      VIBLY_DOT_RECEIVING_ADDRESS: DEPOSIT_ADDRESS,
-      GET_VIB_RELAY_RPC_URL: paymentRpcUrl,
-      GET_VIB_RELAY_CHAIN_ID: "polkadot-local",
-      GET_VIB_DEPOSIT_SCAN_INTERVAL_MS: "1500",
-      GET_VIB_ROOT_UPLOAD_INTERVAL_MS: process.env.GET_VIB_ROOT_UPLOAD_INTERVAL_MS ?? "120000",
     },
     stdio: "pipe",
   });
@@ -92,7 +82,6 @@ async function startConsole(input: {
   profilesJson: string;
   coordinatorProfilesJson: string;
   viblyRpcUrl: string;
-  paymentRpcUrl: string;
   networkId: string;
   networkName: string;
 }): Promise<ChildProcessWithoutNullStreams> {
@@ -116,8 +105,7 @@ async function startConsole(input: {
       NEXT_PUBLIC_VIBLY_NETWORK_ID: input.networkId,
       NEXT_PUBLIC_VIBLY_NETWORK_NAME: input.networkName,
       NEXT_PUBLIC_VIBLY_RPC_URL: input.viblyRpcUrl,
-      NEXT_PUBLIC_PAYMENT_RPC_URL: input.paymentRpcUrl,
-      NEXT_PUBLIC_POLKADOT_RPC_URL: input.paymentRpcUrl,
+      NEXT_PUBLIC_POLKADOT_RPC_URL: input.viblyRpcUrl,
       NEXT_PUBLIC_VIBLY_NETWORK_PROFILES: input.profilesJson,
       VIBLY_COORDINATOR_NETWORK_PROFILES: input.coordinatorProfilesJson,
       PORT: String(CONSOLE_PORT),

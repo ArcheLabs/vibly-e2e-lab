@@ -67,7 +67,6 @@ const PROFILE = process.env.VIBLY_E2E_PROFILE ?? "default";
 const IS_LUMEN_PROFILE = PROFILE === "lumen";
 const COORDINATOR_PORT = Number(process.env.VIBLY_E2E_COORDINATOR_PORT ?? "8787");
 const CONSOLE_PORT = Number(process.env.VIBLY_E2E_CONSOLE_PORT ?? "3001");
-const PAYMENT_CHAIN_RPC_PORT = Number(process.env.VIBLY_E2E_PAYMENT_CHAIN_RPC_PORT ?? "9945");
 const COORDINATOR_URL =
   process.env.COORDINATOR_URL ??
   process.env.LUMEN_COORDINATOR_URL ??
@@ -78,8 +77,6 @@ const CHAIN_ID =
   process.env.VIBLY_E2E_CHAIN_ID ??
   (IS_LUMEN_PROFILE ? "substrate:vibly-testnet" : "substrate:vibly-solo");
 const USE_REAL_STAKE = resolveUseRealStake("e2e:live-llm");
-const ENABLE_GET_VIB_LOCAL = process.env.VIBLY_E2E_ENABLE_GET_VIB_LOCAL === "true";
-const DEFAULT_GET_VIB_DEPOSIT_ADDRESS = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
 const EXTERNAL_COORDINATOR = process.env.VIBLY_E2E_EXTERNAL_COORDINATOR === "true";
 const COORDINATOR_STAKE_SYNC_TIMEOUT_MS = Number(
   process.env.VIBLY_E2E_COORDINATOR_STAKE_SYNC_TIMEOUT_MS ??
@@ -162,7 +159,6 @@ if (IS_LUMEN_PROFILE && EXTERNAL_COORDINATOR) {
 
 const children: ChildProcessWithoutNullStreams[] = [];
 let soloNodeHandle: SoloNodeHandle | undefined;
-let paymentNodeHandle: SoloNodeHandle | undefined;
 let indexerHandle: IndexerHandle | undefined;
 let localProfile: E2eNetworkProfile | undefined;
 let coordinatorStakeSyncUnavailable = false;
@@ -258,15 +254,9 @@ async function main(): Promise<void> {
   const manageLocalStakePipeline = USE_REAL_STAKE && manageLocalNetwork;
   if (manageLocalNetwork) {
     soloNodeHandle = await startSoloNode({ rpcExternal: true, serviceName: "Vibly chain" });
-    paymentNodeHandle = await startSoloNode({
-      rpcPort: PAYMENT_CHAIN_RPC_PORT,
-      rpcExternal: true,
-      serviceName: "payment chain",
-    });
     localProfile = localNetworkProfile({
       coordinatorUrl: COORDINATOR_URL,
       viblyRpcUrl: soloNodeHandle.wsUrl,
-      paymentRpcUrl: paymentNodeHandle.wsUrl,
     });
   }
   if (manageLocalStakePipeline) {
@@ -275,11 +265,6 @@ async function main(): Promise<void> {
   }
 
   const coordinator = await startCoordinator(runRoot, Boolean(state.organizationId));
-  if (manageLocalNetwork && soloNodeHandle) {
-    await rehydrateLocalGetVibClaimState(soloNodeHandle.wsUrl).catch((err) => {
-      console.warn(`[e2e:live] Get VIB claim chain rehydrate skipped: ${String(err)}`);
-    });
-  }
   let consoleProcess: ChildProcessWithoutNullStreams | undefined;
   let completed = false;
   let reportPath: string | undefined;
@@ -480,7 +465,6 @@ async function main(): Promise<void> {
     coordinator.kill("SIGTERM");
     consoleProcess?.kill("SIGTERM");
     if (indexerHandle) await stopIndexer();
-    if (paymentNodeHandle) await stopSoloNode(paymentNodeHandle);
     if (soloNodeHandle) await stopSoloNode(soloNodeHandle);
   }
 }
@@ -1141,18 +1125,6 @@ async function startCoordinator(runRoot: string, preserveDb: boolean): Promise<C
       }
     : {};
 
-  const getVibLocalEnv: Record<string, string> = ENABLE_GET_VIB_LOCAL
-    ? {
-        VIBLY_DOT_RECEIVING_ADDRESS: process.env.VIBLY_DOT_RECEIVING_ADDRESS ?? process.env.VIBLY_E2E_GET_VIB_DEPOSIT_ADDRESS ?? DEFAULT_GET_VIB_DEPOSIT_ADDRESS,
-        GET_VIB_RELAY_RPC_URL: process.env.GET_VIB_RELAY_RPC_URL ?? process.env.VIBLY_E2E_GET_VIB_RELAY_RPC ?? localProfile?.paymentRpcUrls[0] ?? "",
-        GET_VIB_RELAY_CHAIN_ID: process.env.GET_VIB_RELAY_CHAIN_ID ?? process.env.VIBLY_E2E_GET_VIB_RELAY_CHAIN_ID ?? "polkadot-local",
-        GET_VIB_DEPOSIT_SCAN_INTERVAL_MS: process.env.GET_VIB_DEPOSIT_SCAN_INTERVAL_MS ?? process.env.VIBLY_E2E_GET_VIB_SCAN_INTERVAL_MS ?? "1500",
-        GET_VIB_DEPOSIT_FINALITY_BLOCKS: process.env.GET_VIB_DEPOSIT_FINALITY_BLOCKS ?? process.env.VIBLY_E2E_GET_VIB_FINALITY_BLOCKS ?? "1",
-        GET_VIB_RELAY_TOKEN_DECIMALS: process.env.GET_VIB_RELAY_TOKEN_DECIMALS ?? process.env.VIBLY_E2E_GET_VIB_RELAY_DECIMALS ?? "10",
-        GET_VIB_ROOT_UPLOAD_INTERVAL_MS: process.env.GET_VIB_ROOT_UPLOAD_INTERVAL_MS ?? "120000",
-      }
-    : {};
-
   const child = spawn("pnpm", ["--dir", path.resolve(ROOT, "../vibly-coordinator"), "dev"], {
     env: {
       ...process.env,
@@ -1168,7 +1140,6 @@ async function startCoordinator(runRoot: string, preserveDb: boolean): Promise<C
       GOVERNANCE_BACKENDS: "none",
       ASSIGNMENT_EXPIRY_INTERVAL_MS: process.env.ASSIGNMENT_EXPIRY_INTERVAL_MS ?? "500",
       ...stakeEnv,
-      ...getVibLocalEnv,
     },
     stdio: "pipe",
   });
@@ -1196,8 +1167,7 @@ async function startConsole(): Promise<ChildProcessWithoutNullStreams> {
       NEXT_PUBLIC_VIBLY_NETWORK_ID: defaultConsoleNetworkId(),
       NEXT_PUBLIC_VIBLY_NETWORK_NAME: defaultConsoleNetworkName(),
       NEXT_PUBLIC_VIBLY_RPC_URL: resolveConsoleLocalProfile().viblyRpcUrls[0] ?? "",
-      NEXT_PUBLIC_PAYMENT_RPC_URL: resolveConsoleLocalProfile().paymentRpcUrls[0] ?? "",
-      NEXT_PUBLIC_POLKADOT_RPC_URL: resolveConsoleLocalProfile().paymentRpcUrls[0] ?? "",
+      NEXT_PUBLIC_POLKADOT_RPC_URL: resolveConsoleLocalProfile().viblyRpcUrls[0] ?? "",
       PORT: String(CONSOLE_PORT),
     }),
     stdio: "pipe",
@@ -1220,7 +1190,6 @@ function resolveConsoleLocalProfile(): E2eNetworkProfile {
   return localProfile ?? localNetworkProfile({
     coordinatorUrl: COORDINATOR_URL,
     viblyRpcUrl: process.env.VIBLY_E2E_CHAIN_RPC_URL ?? process.env.SUBSTRATE_RPC_URL ?? "",
-    paymentRpcUrl: process.env.VIBLY_E2E_GET_VIB_RELAY_RPC ?? process.env.GET_VIB_RELAY_RPC_URL ?? "",
   });
 }
 
@@ -1839,144 +1808,6 @@ function getFirstNetworkAddress(): string | undefined {
   return undefined;
 }
 
-async function rehydrateLocalGetVibClaimState(rpcUrl: string): Promise<void> {
-  const statusBody = await get<Json>("/admin/get-vib/root-uploader/status");
-  const status = (unwrapData<Json>(statusBody).status ?? {}) as Json;
-  const manifest = status.latestManifest as Json | undefined;
-  if (!manifest?.networkId || !manifest.rootVersion || !manifest.merkleRoot) return;
-
-  const coordinatorEnv = await readCoordinatorEnv();
-  const publisherUri = coordinatorEnv.GET_VIB_ROOT_PUBLISHER_URI ?? process.env.GET_VIB_ROOT_PUBLISHER_URI;
-  if (!publisherUri) return;
-
-  const [{ ApiPromise, WsProvider }, { Keyring }, { cryptoWaitReady, encodeAddress }] = await Promise.all([
-    import("@polkadot/api"),
-    import("@polkadot/keyring"),
-    import("@polkadot/util-crypto"),
-  ]);
-  await cryptoWaitReady();
-  const api = await ApiPromise.create({ provider: new WsProvider(rpcUrl) });
-  try {
-    const keyring = new Keyring({ type: "sr25519" });
-    const sudo = keyring.addFromUri("//Alice");
-    const publisher = keyring.addFromUri(publisherUri);
-    const reserve = encodeAddress(new Uint8Array(32).fill(7), 42);
-    const rootVersion = Number(manifest.rootVersion);
-    const merkleRoot = String(manifest.merkleRoot);
-    const totalCumulativeBaseUnits = decimalToBaseUnits(String(manifest.totalCumulativeAmount ?? "0"), 12);
-    const currentRoot = await api.query.vibClaim.claimRoot() as unknown as { isSome?: boolean; unwrap?: () => Json };
-    const current = currentRoot.isSome && typeof currentRoot.unwrap === "function" ? currentRoot.unwrap() : undefined;
-    const currentRootVersion = Number((current?.rootVersion as { toString?: () => string } | undefined)?.toString?.() ?? 0);
-    const currentMerkleRoot = (current?.merkleRoot as { toHex?: () => string } | undefined)?.toHex?.();
-    const needsRoot = currentRootVersion !== rootVersion || currentMerkleRoot !== merkleRoot;
-    if (!needsRoot) return;
-
-    const configuredPublisher = await api.query.vibClaim.claimRootPublisher() as unknown as { toString(): string };
-    if (configuredPublisher.toString() !== publisher.address) {
-      await signAndWaitLocal(
-        api.tx.sudo.sudo(api.tx.vibClaim.setClaimRootPublisher(publisher.address)),
-        sudo,
-        "vibClaim.setClaimRootPublisher",
-      );
-    }
-
-    const publisherAccount = await api.query.system.account(publisher.address) as unknown as { data: { free: { toString(): string } } };
-    if (BigInt(publisherAccount.data.free.toString()) < 1_000_000_000_000n) {
-      await signAndWaitLocal(
-        api.tx.balances.transferAllowDeath
-          ? api.tx.balances.transferAllowDeath(publisher.address, 10_000_000_000_000n)
-          : api.tx.balances.transfer(publisher.address, 10_000_000_000_000n),
-        sudo,
-        "balances.transferAllowDeath",
-      );
-    }
-
-    if (!api.tx.balances.forceSetBalance) throw new Error("balances.forceSetBalance is unavailable");
-    const reserveTarget = BigInt(totalCumulativeBaseUnits) + 10_000_000n * 10n ** 12n;
-    const reserveAccount = await api.query.system.account(reserve) as unknown as { data: { free: { toString(): string } } };
-    if (BigInt(reserveAccount.data.free.toString()) < reserveTarget) {
-      await signAndWaitLocal(
-        api.tx.sudo.sudo(api.tx.balances.forceSetBalance(reserve, reserveTarget)),
-        sudo,
-        "balances.forceSetBalance",
-      );
-    }
-
-    await signAndWaitLocal(
-      api.tx.vibClaim.setClaimRoot(
-        String(manifest.networkId),
-        rootVersion,
-        merkleRoot,
-        totalCumulativeBaseUnits,
-        String(manifest.metadataHash),
-      ),
-      publisher,
-      "vibClaim.setClaimRoot",
-    );
-    console.log(`[e2e:live] Rehydrated Get VIB claim root v${rootVersion} on local chain.`);
-  } finally {
-    await api.disconnect();
-  }
-}
-
-async function readCoordinatorEnv(): Promise<Record<string, string>> {
-  const envPath = path.resolve(ROOT, "../vibly-coordinator/.env");
-  if (!existsSync(envPath)) return {};
-  const text = await readFile(envPath, "utf8");
-  const env: Record<string, string> = {};
-  for (const rawLine of text.split(/\n/u)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const index = line.indexOf("=");
-    if (index < 0) continue;
-    env[line.slice(0, index)] = parseEnvValue(line.slice(index + 1));
-  }
-  return env;
-}
-
-function parseEnvValue(value: string): string {
-  const trimmed = value.trim();
-  if ((trimmed.startsWith("'") && trimmed.endsWith("'")) || (trimmed.startsWith("\"") && trimmed.endsWith("\""))) return trimmed.slice(1, -1);
-  return trimmed;
-}
-
-async function signAndWaitLocal(
-  tx: unknown,
-  signer: unknown,
-  label: string,
-): Promise<void> {
-  const submittable = tx as {
-    signAndSend: (
-      signer: unknown,
-      callback: (result: {
-        dispatchError?: { toString(): string };
-        events?: Array<{ event: { section: string; method: string; data: unknown[] } }>;
-        status: { isInBlock: boolean; isFinalized: boolean };
-      }) => void,
-    ) => Promise<() => void>;
-  };
-  await new Promise<void>((resolve, reject) => {
-    void submittable.signAndSend(signer, (result) => {
-      if (result.dispatchError) {
-        reject(new Error(`${label}: ${result.dispatchError.toString()}`));
-        return;
-      }
-      const sudoFailed = result.events?.find((item) => item.event.section === "sudo" && item.event.method === "Sudid" && String(item.event.data[0]).startsWith("Err"));
-      if (sudoFailed) {
-        reject(new Error(`${label}: ${String(sudoFailed.event.data[0])}`));
-        return;
-      }
-      if (result.status.isInBlock || result.status.isFinalized) resolve();
-    }).catch(reject);
-  });
-}
-
-function decimalToBaseUnits(value: string, decimals: number): string {
-  const [wholeRaw, fractionRaw = ""] = value.split(".");
-  const whole = wholeRaw || "0";
-  const fraction = `${fractionRaw}${"0".repeat(decimals)}`.slice(0, decimals);
-  return String(BigInt(whole) * 10n ** BigInt(decimals) + BigInt(fraction || "0"));
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

@@ -31,38 +31,26 @@ VIBLY_E2E_MOCK_STAKE=true pnpm e2e:local
 # Skip console smoke test
 pnpm e2e:local:no-console
 
-# Manual Get VIB Console lab. Keeps local chains, Coordinator, and Console running
 # for browser interaction; no Playwright and no agent daemons. The local claim
 # root uploader is enabled by default and uploads every 2 minutes.
-pnpm dev:get-vib-console
 
 # If the lab runs on a remote server and you SSH-forward local 3002 -> remote 3001:
-VIBLY_E2E_PUBLIC_CONSOLE_PORT=3002 pnpm dev:get-vib-console
 
-# Manual Get VIB labs default to a production Console server
 # (`next build && next start`) so SSH-forwarded browsers do not hit Next HMR
 # WebSocket failures. Use this only when you need hot reload while editing UI.
-VIBLY_E2E_CONSOLE_MODE=dev pnpm dev:get-vib-console
 
-# Production-like Get VIB Console lab for Lumen/Paseo.
 # Reads ../vibly-coordinator/cloud-run.env.yaml and
 # ../vibly-coordinator/network-manifest.production.json, starts a local
-# Coordinator + Console, and does not start a local payment chain.
-# By default this is conversion-only: it connects to Paseo, but disables
 # Vibly claim/balance features so it will not use production Lumen RPC.
-pnpm dev:get-vib-console:paseo
 
 # Same SSH-forwarding shape as above:
-VIBLY_E2E_PUBLIC_CONSOLE_PORT=3002 pnpm dev:get-vib-console:paseo
 
 # To test claim/balance against a local Vibly chain, opt in explicitly.
 # A loopback RPC URL starts and initializes a local vibly-solo-node.
-VIBLY_E2E_VIBLY_RPC_URLS=ws://127.0.0.1:9944 pnpm dev:get-vib-console:paseo
 
 # To attach to an already-running local Vibly chain instead:
 VIBLY_E2E_EXTERNAL_VIBLY_CHAIN=true \
 VIBLY_E2E_VIBLY_RPC_URLS=ws://127.0.0.1:9944 \
-pnpm dev:get-vib-console:paseo
 
 # Cross-repo deployment planner / orchestrator
 pnpm deploy:all
@@ -218,7 +206,6 @@ For a stricter production run, combine `--phase=full --require-deploy-hook` so e
 - `vibly-indexer` is included in the deploy planner, but it is not a serverless service. A correct hosted deployment must still run its Docker Compose stack or an equivalent Postgres + SubQuery topology.
 - `vibly-coordinator` is also not fully serverless in practice. The app process can run on Cloud Run, but `STORAGE_MODE=postgres` and an external Postgres database are mandatory in production. Coordinator startup runs migrations against that database.
 - The built-in GCP deploy profile now enforces that requirement explicitly: it will fail unless `GCP_VIBLY_COORDINATOR_ENV_FILE` points at an existing Coordinator env yaml and `GCP_VIBLY_COORDINATOR_CLOUDSQL_INSTANCE` is set.
-- Public `Lumen` and `Monolith` environments do not need a separately deployed local payment chain. `Lumen` uses Paseo RPCs for relay-side transfers; `Monolith` uses Polkadot mainnet RPCs. The extra payment chain only exists in local E2E / manual Get VIB labs.
 - `pnpm deploy:npm` now defaults to the actual npm-publishable projects only: `concord`, `vibly-client`, and `vibly-coordinator-http-contract`. Pass `--only=...` if you want to override that default selection.
 - The built-in npm profile is now Access Token-first. Set `NPM_TOKEN` or `NODE_AUTH_TOKEN`; the deploy script maps `NPM_TOKEN` into `NODE_AUTH_TOKEN`, generates a temporary `.npmrc`, and no longer expects an OTP field.
 - The npm profile now fails earlier with clearer messages: it checks `npm whoami` first, and for single-package publishes it also rejects already-published versions before running `pnpm publish`.
@@ -384,7 +371,6 @@ pnpm e2e:vibmath:lumen:identity:sync
 
 ## Real-chain pipeline
 
-E2E commands boot or verify the whole network profile: Coordinator, Console, Vibly chain, and a separate payment chain. Local runs fail fast if `vibly-solo-node` cannot be started; use `VIBLY_E2E_BUILD_CHAIN=true` to build it automatically.
 
 The public remote profiles exposed by the lab follow the current naming:
 
@@ -409,7 +395,6 @@ When `VIBLY_E2E_MOCK_STAKE` is unset, the runner also enables the real stake pat
 | `VIBLY_E2E_EXTERNAL_INDEXER` | `false` | Set `true` to connect to an already-running indexer |
 | `VIBLY_E2E_BUILD_CHAIN` | `false` | Set `true` to auto-run `cargo build -p vibly-solo-node` |
 | `VIBLY_E2E_CHAIN_RPC_PORT` | `9944` | Chain RPC port |
-| `VIBLY_E2E_PAYMENT_CHAIN_RPC_PORT` | `9945` | Payment-chain RPC port used by Get VIB balance reads/transfers |
 | `VIBLY_E2E_INDEXER_URL` | *(from docker-compose)* | Override indexer GraphQL URL when using external indexer |
 | `VIBLY_SOLO_NODE_BIN` | *(auto-detected)* | Override path to the `vibly-solo-node` binary |
 | `VIBLY_E2E_CHAIN_ID` | `substrate:vibly-solo` | Logical chain identifier |
@@ -433,13 +418,7 @@ When `VIBLY_E2E_MOCK_STAKE` is unset, the runner also enables the real stake pat
 | `VIBLY_E2E_SKIP_SSE_TIMING` | `false` | Skip the SSE timing probe |
 | `VIBLY_E2E_PUBLIC_CONSOLE_PORT` | `VIBLY_E2E_CONSOLE_PORT` | Browser-facing forwarded port for manual Console labs, e.g. local `3002` forwarding remote `3001` |
 | `VIBLY_E2E_PUBLIC_CONSOLE_URL` | derived from port | Full browser-facing Console URL for SSH/proxy setups; overrides `VIBLY_E2E_PUBLIC_CONSOLE_PORT` |
-| `VIBLY_E2E_CONSOLE_MODE` | `production` for manual Get VIB labs, `dev` elsewhere | Use `production` to avoid Next dev HMR WebSocket traffic over SSH forwards; use `dev` for hot reload |
-| `GET_VIB_ROOT_UPLOAD_INTERVAL_MS` | `120000` in Get VIB local labs | Local Get VIB claim-root upload cadence. Set to `0` to disable automatic uploads. |
-| `VIBLY_E2E_COORDINATOR_ENV_FILE` | `../vibly-coordinator/cloud-run.env.yaml` | Production-like Coordinator env yaml used by `dev:get-vib-console:paseo` |
-| `VIBLY_E2E_NETWORK_MANIFEST_FILE` | `../vibly-coordinator/network-manifest.production.json` | Network manifest source used by `dev:get-vib-console:paseo`; the lab rewrites `coordinatorUrls` to the local Coordinator |
-| `VIBLY_E2E_VIBLY_RPC_URLS` | empty | Optional comma-separated Vibly chain RPC URLs for `dev:get-vib-console:paseo`; when empty, the lab is conversion-only and disables Vibly claim/balance features instead of using production Lumen RPC. A loopback URL starts a local Vibly chain unless `VIBLY_E2E_EXTERNAL_VIBLY_CHAIN=true` |
 | `VIBLY_E2E_EXTERNAL_VIBLY_CHAIN` | `false` | Attach to an already-running local Vibly chain instead of starting one when `VIBLY_E2E_VIBLY_RPC_URLS` points at loopback |
-| `VIBLY_E2E_PASEO_START_BLOCK` | finalized head minus lookback | Explicit relay watcher start block for `dev:get-vib-console:paseo` |
 | `VIBLY_E2E_PASEO_LOOKBACK_BLOCKS` | `20` | Number of finalized Paseo blocks to scan backwards on startup when no explicit start block is provided |
 | `VIBLY_E2E_PASEO_WATCHER` | `true` | Set to `false` to disable the Paseo deposit watcher loop |
 
@@ -463,9 +442,6 @@ When `VIBLY_E2E_MOCK_STAKE` is unset, the runner also enables the real stake pat
 | `VIBLY_E2E_TESTNET_SEED` | `false` | If `true`, seed testnet chain identities/stake using `vibly-client` CLI instead of using preseeded bindings |
 | `VIBLY_E2E_CHAIN_RPC_URL` | *(unset)* | External/testnet chain RPC URL when seeding testnet |
 | `VIBLY_E2E_TESTNET_BOND_AMOUNT` | `100` | Bond amount for testnet seed mode |
-| `VIBLY_E2E_ENABLE_GET_VIB_LOCAL` | `false` | Enable local Get VIB relay watcher wiring for live LLM runs |
-| `VIBLY_E2E_GET_VIB_RELAY_RPC` | local chain ws URL | Override relay RPC for local Get VIB wiring |
-| `VIBLY_E2E_GET_VIB_DEPOSIT_ADDRESS` | Alice dev address | Override local Get VIB deposit address |
 | `VIBLY_E2E_SKIP_CONSOLE` | `false` | Skip starting Console during live LLM runs |
 | `VIBLY_E2E_CONSOLE_START_TIMEOUT_MS` | `240000` | Console dev server startup timeout; e2e starts Console with polling watchers by default |
 | `VIBLY_E2E_KEEP_ALIVE_ON_SUCCESS` | script-dependent | Keep services running after success; enabled by `pnpm e2e:live-llm` |
@@ -476,11 +452,8 @@ Live LLM examples:
 # Local live run. Requires a local solo-node binary, or set VIBLY_E2E_BUILD_CHAIN=true.
 VIBLY_E2E_RUN_NAME=local-live pnpm e2e:live-llm
 
-# Local live run. Mock stake still boots Vibly/payment chains, but skips indexer stake sync.
 VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live pnpm e2e:live-llm
 
-# Local live run with Get VIB local relay wiring enabled (for Console Get VIB page smoke).
-VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live pnpm e2e:live-llm:get-vib-local
 
 # Pause at a named boundary, then resume later.
 VIBLY_E2E_MOCK_STAKE=true VIBLY_E2E_RUN_NAME=local-live VIBLY_E2E_PAUSE_AT=after-proposal pnpm e2e:live-llm
@@ -525,13 +498,7 @@ knowledge/         Seed knowledge entries (literature index, Goldbach background
 | `pnpm e2e:live-llm:ci` | Live LLM run that exits and cleans up after success |
 | `pnpm e2e:live-llm:fresh` | Reset a named live LLM run and start it fresh |
 | `pnpm e2e:live-llm:resume` | Resume a named live LLM run |
-| `pnpm e2e:live-llm:get-vib-local` | Live LLM run with local Get VIB relay wiring enabled |
-| `pnpm e2e:live-llm:resume:get-vib-local` | Resume live LLM run with local Get VIB relay wiring enabled |
 | `pnpm e2e:live-llm:testnet` | Attach live LLM run to external/testnet coordinator |
-| `pnpm e2e:get-vib` | Get VIB flow smoke: quote/order/finalize/manifest/summary/proof/records, with optional chain claim when chain RPC is configured |
-| `pnpm e2e:get-vib:polkadot-local` | Local Polkadot relay + local chain Get VIB flow: relay deposit observation/finalize + on-chain claim verification |
-| `pnpm dev:get-vib-console` | Manual Get VIB Console lab: starts local Vibly/payment chains, Coordinator, and Console; keeps them alive for browser testing; does not run Playwright or agents |
-| `pnpm dev:get-vib-console:paseo` | Production-like Manual Get VIB Console lab: starts local Coordinator/Console with a Paseo-backed manifest and no local payment chain |
 | `pnpm deploy:all` | Cross-repo deployment planner/orchestrator. Default phase is `plan` |
 | `pnpm deploy:build` | Cross-repo build orchestration across all registered repos |
 | `pnpm deploy:gcp:plan` | Preview built-in Google Cloud deploy hooks |

@@ -6,23 +6,7 @@ export interface E2eNetworkProfile {
   stage: "local" | "testnet" | "mainnet";
   coordinatorUrls: string[];
   viblyRpcUrls: string[];
-  paymentRpcUrls: string[];
-  paymentTokenSymbol: string;
-  paymentTokenDecimals: number;
-  relayTokenSymbol: string;
 }
-
-const PASEO_PAYMENT_RPC_URLS = [
-  "wss://paseo-rpc.n.dwellir.com",
-  "wss://paseo.dotters.network",
-  "wss://paseo-rpc.dwellir.com",
-];
-
-const POLKADOT_PAYMENT_RPC_URLS = [
-  "wss://rpc.polkadot.io",
-  "wss://polkadot.api.onfinality.io/public-ws",
-  "wss://polkadot-rpc.dwellir.com",
-];
 
 function splitUrls(value: string | undefined): string[] {
   return (value ?? "")
@@ -38,18 +22,13 @@ function firstNonEmpty(...values: Array<string | undefined>): string | undefined
 export function localNetworkProfile(input: {
   coordinatorUrl: string;
   viblyRpcUrl: string;
-  paymentRpcUrl: string;
 }): E2eNetworkProfile {
   return {
     id: process.env.VIBLY_E2E_CHAIN_ID ?? "substrate:vibly-solo",
     label: process.env.VIBLY_E2E_NETWORK_NAME ?? "Local",
     stage: "local",
     coordinatorUrls: [input.coordinatorUrl],
-    viblyRpcUrls: [input.viblyRpcUrl],
-    paymentRpcUrls: [input.paymentRpcUrl],
-    paymentTokenSymbol: process.env.VIBLY_E2E_PAYMENT_TOKEN_SYMBOL ?? "DOT",
-    paymentTokenDecimals: Number(process.env.VIBLY_E2E_PAYMENT_TOKEN_DECIMALS ?? "10"),
-    relayTokenSymbol: process.env.VIBLY_E2E_PAYMENT_TOKEN_SYMBOL ?? "DOT",
+    viblyRpcUrls: [input.viblyRpcUrl].filter(Boolean),
   };
 }
 
@@ -66,10 +45,6 @@ export function remoteNetworkProfiles(): E2eNetworkProfile[] {
       stage: "testnet",
       coordinatorUrls: testnetCoordinator ? [testnetCoordinator] : [],
       viblyRpcUrls: testnetVibly,
-      paymentRpcUrls: splitUrls(process.env.VIBLY_E2E_PASEO_RPC_URLS).concat(PASEO_PAYMENT_RPC_URLS),
-      paymentTokenSymbol: "PAS",
-      paymentTokenDecimals: 10,
-      relayTokenSymbol: "PAS",
     },
     {
       id: "substrate:vibly-incentivized-testnet",
@@ -77,10 +52,6 @@ export function remoteNetworkProfiles(): E2eNetworkProfile[] {
       stage: "mainnet",
       coordinatorUrls: incentivizedCoordinator ? [incentivizedCoordinator] : [],
       viblyRpcUrls: incentivizedVibly,
-      paymentRpcUrls: splitUrls(process.env.VIBLY_E2E_POLKADOT_RPC_URLS).concat(POLKADOT_PAYMENT_RPC_URLS),
-      paymentTokenSymbol: "DOT",
-      paymentTokenDecimals: 10,
-      relayTokenSymbol: "DOT",
     },
   ];
 }

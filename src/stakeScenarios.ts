@@ -583,11 +583,6 @@ async function standaloneMain(): Promise<void> {
   await mkdir(DATA_DIR, { recursive: true });
 
   const soloNodeHandle = await startSoloNode({ rpcExternal: true, serviceName: "Vibly chain" });
-  const paymentNodeHandle = await startSoloNode({
-    rpcPort: Number(process.env.VIBLY_E2E_PAYMENT_CHAIN_RPC_PORT ?? "9945"),
-    rpcExternal: true,
-    serviceName: "payment chain",
-  });
   const indexerHandle = await startIndexer(soloNodeHandle.rpcPort);
 
   try {
@@ -641,7 +636,6 @@ async function standaloneMain(): Promise<void> {
     console.log("[stake] all scenarios passed.");
   } finally {
     await stopIndexer();
-    await stopSoloNode(paymentNodeHandle);
     await stopSoloNode(soloNodeHandle);
   }
 }
