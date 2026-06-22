@@ -58,26 +58,23 @@ import {
   LiveActionError,
   type LiveActionErrorContext,
 } from "./liveErrors.js";
+import { resolveLiveEnvironment } from "./liveEnv.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const SCENARIO = path.join(ROOT, "scenarios", "vibing-math");
 const REPORT_DIR = path.join(ROOT, "reports");
 const DATA_DIR = path.join(ROOT, "data");
-const PROFILE = process.env.VIBLY_E2E_PROFILE ?? "default";
-const IS_LUMEN_PROFILE = PROFILE === "lumen";
-const COORDINATOR_PORT = Number(process.env.VIBLY_E2E_COORDINATOR_PORT ?? "8787");
-const CONSOLE_PORT = Number(process.env.VIBLY_E2E_CONSOLE_PORT ?? "3001");
-const COORDINATOR_URL =
-  process.env.COORDINATOR_URL ??
-  process.env.LUMEN_COORDINATOR_URL ??
-  `http://127.0.0.1:${COORDINATOR_PORT}`;
+const LIVE_ENV = resolveLiveEnvironment();
+const PROFILE = LIVE_ENV.profile;
+const IS_LUMEN_PROFILE = LIVE_ENV.isLumenProfile;
+const COORDINATOR_PORT = LIVE_ENV.coordinatorPort;
+const CONSOLE_PORT = LIVE_ENV.consolePort;
+const COORDINATOR_URL = LIVE_ENV.coordinatorUrl;
 const COORDINATOR_START_TIMEOUT_MS = Number(process.env.VIBLY_E2E_COORDINATOR_START_TIMEOUT_MS ?? "120000");
 const API_TOKEN = process.env.COORDINATOR_API_TOKEN ?? "dev-token";
-const CHAIN_ID =
-  process.env.VIBLY_E2E_CHAIN_ID ??
-  (IS_LUMEN_PROFILE ? "substrate:vibly-testnet" : "substrate:vibly-solo");
+const CHAIN_ID = LIVE_ENV.chainId;
 const USE_REAL_STAKE = resolveUseRealStake("e2e:live-llm");
-const EXTERNAL_COORDINATOR = process.env.VIBLY_E2E_EXTERNAL_COORDINATOR === "true";
+const EXTERNAL_COORDINATOR = LIVE_ENV.externalCoordinator;
 const COORDINATOR_STAKE_SYNC_TIMEOUT_MS = Number(
   process.env.VIBLY_E2E_COORDINATOR_STAKE_SYNC_TIMEOUT_MS ??
   (EXTERNAL_COORDINATOR ? "15000" : "120000"),
@@ -255,6 +252,7 @@ async function main(): Promise<void> {
   if (manageLocalNetwork) {
     soloNodeHandle = await startSoloNode({ rpcExternal: true, serviceName: "Vibly chain" });
     localProfile = localNetworkProfile({
+      id: CHAIN_ID,
       coordinatorUrl: COORDINATOR_URL,
       viblyRpcUrl: soloNodeHandle.wsUrl,
     });
@@ -273,6 +271,8 @@ async function main(): Promise<void> {
   try {
     if (process.env.VIBLY_E2E_SKIP_CONSOLE !== "true") {
       consoleProcess = await startConsole();
+    } else {
+      console.log("[e2e:live] Console skipped because VIBLY_E2E_SKIP_CONSOLE=true");
     }
 
     if (state.pausedAt) {
@@ -1188,6 +1188,7 @@ function defaultConsoleNetworkName(): string {
 
 function resolveConsoleLocalProfile(): E2eNetworkProfile {
   return localProfile ?? localNetworkProfile({
+    id: CHAIN_ID,
     coordinatorUrl: COORDINATOR_URL,
     viblyRpcUrl: process.env.VIBLY_E2E_CHAIN_RPC_URL ?? process.env.SUBSTRATE_RPC_URL ?? "",
   });
@@ -1570,8 +1571,10 @@ function setPipeLogDir(dir: string): void {
 
 async function writeLogLine(kind: "stdout" | "stderr", name: string, line: string): Promise<void> {
   if (!pipeLogDir) return;
-  const file = path.join(pipeLogDir, `logs`, `${name}.${kind}.log`);
+  const logDir = path.join(pipeLogDir, "logs");
+  const file = path.join(logDir, `${name}.${kind}.log`);
   try {
+    await mkdir(logDir, { recursive: true });
     await appendFile(file, line + "\n", "utf8");
   } catch {
     // best effort

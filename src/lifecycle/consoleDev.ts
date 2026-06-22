@@ -81,6 +81,7 @@ export async function waitForHttpWithChild(
 
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
+  let lastHttpStatus: string | undefined;
   while (Date.now() < deadline) {
     if (childFailure) throw childFailure;
     const response = await fetch(url).catch((error) => {
@@ -88,9 +89,17 @@ export async function waitForHttpWithChild(
       return undefined;
     });
     if (response?.ok) return;
+    if (response) {
+      lastHttpStatus = `${response.status} ${response.statusText}`.trim();
+      lastError = undefined;
+    }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
-  const details = lastError ? ` Last fetch error: ${String(lastError)}` : "";
+  const details = lastHttpStatus
+    ? ` Last HTTP status: ${lastHttpStatus}`
+    : lastError
+      ? ` Last fetch error: ${String(lastError)}`
+      : "";
   throw new Error(`Timed out waiting ${timeoutMs}ms for Console at ${url}.${details}`);
 }

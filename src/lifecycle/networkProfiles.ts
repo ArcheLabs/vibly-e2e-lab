@@ -22,9 +22,10 @@ function firstNonEmpty(...values: Array<string | undefined>): string | undefined
 export function localNetworkProfile(input: {
   coordinatorUrl: string;
   viblyRpcUrl: string;
+  id?: string;
 }): E2eNetworkProfile {
   return {
-    id: process.env.VIBLY_E2E_CHAIN_ID ?? "substrate:vibly-solo",
+    id: input.id ?? process.env.VIBLY_E2E_CHAIN_ID ?? "substrate:vibly-solo",
     label: process.env.VIBLY_E2E_NETWORK_NAME ?? "Local",
     stage: "local",
     coordinatorUrls: [input.coordinatorUrl],
